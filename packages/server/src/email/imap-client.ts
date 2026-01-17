@@ -6,7 +6,7 @@
 import Imap from 'imap';
 import { simpleParser, ParsedMail } from 'mailparser';
 import { EventEmitter } from 'events';
-import { EmailMessage, EmailAddress, Attachment, EmailConnectionConfig } from '../types';
+import { EmailMessage, EmailAddress, Attachment, EmailConnectionConfig } from '@kill-email/shared';
 
 export interface ImapClientEvents {
   connected: () => void;
@@ -26,7 +26,6 @@ export class ImapClient extends EventEmitter {
     this.config = config;
   }
 
-  // Connect to IMAP server
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       const imapConfig: Imap.Config = {
@@ -39,7 +38,6 @@ export class ImapClient extends EventEmitter {
         authTimeout: 10000,
       };
 
-      // For Gmail OAuth
       if (this.config.auth.accessToken) {
         imapConfig.xoauth2 = this.generateXOAuth2Token(
           this.config.auth.user,
@@ -69,13 +67,11 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Generate XOAuth2 token for Gmail
   private generateXOAuth2Token(user: string, accessToken: string): string {
     const authString = `user=${user}\x01auth=Bearer ${accessToken}\x01\x01`;
     return Buffer.from(authString).toString('base64');
   }
 
-  // Disconnect from server
   async disconnect(): Promise<void> {
     if (this.imap && this.connected) {
       this.imap.end();
@@ -83,7 +79,6 @@ export class ImapClient extends EventEmitter {
     }
   }
 
-  // Open a mailbox
   async openMailbox(mailbox: string = 'INBOX'): Promise<Imap.Box> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -98,7 +93,6 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Get list of mailboxes
   async getMailboxes(): Promise<Imap.MailBoxes> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -113,7 +107,6 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Fetch emails with criteria
   async fetchEmails(options: {
     mailbox?: string;
     limit?: number;
@@ -139,7 +132,6 @@ export class ImapClient extends EventEmitter {
 
     await this.openMailbox(mailbox);
 
-    // Build search criteria
     const searchCriteria: any[] = all ? ['ALL'] : [];
     if (!all) {
       if (unseen) searchCriteria.push('UNSEEN');
@@ -154,7 +146,6 @@ export class ImapClient extends EventEmitter {
       return [];
     }
 
-    // Apply offset and limit
     const selectedUids = uids.slice(offset, offset + limit);
     this.emit('progress', 0, selectedUids.length);
 
@@ -177,7 +168,6 @@ export class ImapClient extends EventEmitter {
     return emails;
   }
 
-  // Search for emails matching criteria
   private async searchEmails(criteria: any[]): Promise<number[]> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -192,7 +182,6 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Fetch a single email by UID
   private async fetchSingleEmail(uid: number): Promise<EmailMessage | null> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -241,7 +230,6 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Convert parsed email to our EmailMessage format
   private parsedToEmailMessage(
     parsed: ParsedMail,
     uid: number,
@@ -293,7 +281,6 @@ export class ImapClient extends EventEmitter {
     };
   }
 
-  // Move email to folder
   async moveEmail(uid: number, targetFolder: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -308,12 +295,10 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Delete email (move to trash)
   async deleteEmail(uid: number, trashFolder: string = '[Gmail]/Trash'): Promise<void> {
     await this.moveEmail(uid, trashFolder);
   }
 
-  // Add label/flag to email
   async addFlag(uid: number, flag: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -328,7 +313,6 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Remove label/flag from email
   async removeFlag(uid: number, flag: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -343,17 +327,14 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Mark email as read
   async markAsRead(uid: number): Promise<void> {
     await this.addFlag(uid, '\\Seen');
   }
 
-  // Mark email as unread
   async markAsUnread(uid: number): Promise<void> {
     await this.removeFlag(uid, '\\Seen');
   }
 
-  // Create a new folder/label
   async createFolder(folderName: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.imap) {
@@ -368,19 +349,16 @@ export class ImapClient extends EventEmitter {
     });
   }
 
-  // Check if connected
   isConnected(): boolean {
     return this.connected;
   }
 
-  // Get email count in mailbox
   async getEmailCount(mailbox: string = 'INBOX'): Promise<number> {
     const box = await this.openMailbox(mailbox);
     return box.messages.total;
   }
 }
 
-// Gmail-specific presets
 export const GMAIL_CONFIG: Partial<EmailConnectionConfig> = {
   provider: 'gmail',
   imap: {
@@ -395,7 +373,6 @@ export const GMAIL_CONFIG: Partial<EmailConnectionConfig> = {
   },
 };
 
-// Outlook/Hotmail presets
 export const OUTLOOK_CONFIG: Partial<EmailConnectionConfig> = {
   provider: 'outlook',
   imap: {
@@ -410,7 +387,6 @@ export const OUTLOOK_CONFIG: Partial<EmailConnectionConfig> = {
   },
 };
 
-// Yahoo presets
 export const YAHOO_CONFIG: Partial<EmailConnectionConfig> = {
   provider: 'imap',
   imap: {
