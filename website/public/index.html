@@ -269,6 +269,8 @@ section h2::before { content: "> "; color: var(--ember); }
 .gauge .cells { display: flex; gap: 3px; }
 .gauge .cells i { flex: 1; height: 10px; background: #2a0d0c; }
 .gauge .cells i.on { background: var(--phosphor); box-shadow: 0 0 6px rgb(255 59 46 / 0.6); }
+.mode-card.rescue { border-color: var(--alive); }
+.mode-card.rescue h3 { color: var(--alive); }
 .mode-card .rule { font-size: var(--step--1); color: var(--ash); border-top: 1px dashed var(--ember); padding-top: 0.75rem; }
 
 .floor { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.75rem 2rem; margin: 0; padding: 0; list-style: none; }
@@ -283,9 +285,25 @@ section h2::before { content: "> "; color: var(--ember); }
 .engine .tag { font-size: var(--step--1); color: var(--amber); text-transform: uppercase; letter-spacing: 0.08em; }
 .engine p { margin: 0; }
 
-.install { background: var(--glass); border: 1px solid var(--ember); padding: 1.25rem; overflow-x: auto; }
-.install pre { margin: 0; font: 400 var(--step-0)/1.7 var(--mono); color: var(--bone); }
-.install .c { color: var(--ash); }
+.waitlist { display: grid; gap: 0.75rem; max-width: 40rem; }
+.waitlist label { color: var(--ash); font-size: var(--step--1); text-transform: uppercase; letter-spacing: 0.08em; }
+.wl-row { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.wl-row input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font: 400 1.35rem/1 var(--display);
+  color: var(--bone);
+  background: var(--glass);
+  border: 1px solid var(--ember);
+  padding: 0.6rem 0.8rem;
+}
+.wl-row input::placeholder { color: var(--ash); }
+.wl-row input:focus { outline: 2px solid var(--amber); outline-offset: 2px; border-color: var(--amber); }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.wl-status { margin: 0; min-height: 1.5em; font: 400 1.3rem/1.2 var(--display); }
+.wl-status.ok { color: var(--alive); }
+.wl-status.err { color: var(--amber); }
+.wl-fine { margin: 0; color: var(--ash); font-size: var(--step--1); }
 
 footer {
   border-top: 1px solid var(--ember);
@@ -312,6 +330,7 @@ footer {
       <a href="#modes">Modes</a>
       <a href="#safety">Safety</a>
       <a href="#engine">On-device AI</a>
+      <a href="#waitlist">Waitlist</a>
       <a href="https://github.com/JulianKingman/Kill-email">GitHub</a>
       <button class="toggle" id="crt-toggle" type="button" aria-pressed="true">CRT: on</button>
     </nav>
@@ -342,9 +361,9 @@ footer {
     </div>
 
     <div class="tube">
-      <div class="screen" role="region" aria-label="Example Sweep session">
+      <div class="screen" role="region" aria-label="Example Kill List session">
         <div class="screen-head">
-          <span class="mode">MODE: SWEEP</span>
+          <span class="mode">MODE: KILL LIST</span>
           <span>INBOX · 41,286 MSGS</span>
           <span class="sim">EXAMPLE DATA</span>
         </div>
@@ -365,17 +384,17 @@ footer {
         </div>
         <div class="screen-foot">
           <div class="meter" aria-live="polite"><span>TERMINATED <b id="killed">0</b></span><span>UNSUBSCRIBED <b id="unsubbed">0</b><span class="cursor" aria-hidden="true">&nbsp;</span></span></div>
-          <button class="btn" id="run" type="button">Run sweep</button>
+          <button class="btn" id="run" type="button">Execute</button>
         </div>
       </div>
     </div>
   </section>
 
   <section id="modes" aria-labelledby="modes-title">
-    <h2 id="modes-title">Three ways to clear the board</h2>
+    <h2 id="modes-title">Four ways to clear the board</h2>
     <div class="modes">
       <article class="mode-card">
-        <h3>Sweep</h3>
+        <h3>Kill List</h3>
         <div class="gauge"><span>Aggression</span><div class="cells"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
         <p>Groups your mail by sender and shows who sends the most while you open the least. Unsubscribe and delete a whole sender in one keystroke. No AI involved.</p>
         <p class="rule">Targets mailing-list senders you have never replied to. You confirm each one.</p>
@@ -391,6 +410,12 @@ footer {
         <div class="gauge"><span>Aggression</span><div class="cells"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div></div>
         <p>Flips the default. Keeps only mail the model recognizes as worth keeping: people, receipts, travel, legal, anything waiting on you. The rest goes.</p>
         <p class="rule">Keeps at 60% confidence or higher, past your age cutoff.</p>
+      </article>
+      <article class="mode-card rescue">
+        <h3>Search &amp; Rescue</h3>
+        <div class="gauge"><span>Aggression: none</span><div class="cells"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+        <p>Runs the other way. Digs through the pile for mail you would actually want to read: a note from an old friend, a reply you never saw, an offer that still matters.</p>
+        <p class="rule">Deletes nothing. Surfaces what the model thinks is worth your time.</p>
       </article>
     </div>
   </section>
@@ -424,12 +449,21 @@ footer {
     </div>
   </section>
 
-  <section id="install" aria-labelledby="install-title">
-    <h2 id="install-title">Get it</h2>
-    <div class="install">
-<pre><span class="c"># Not released yet. Watch the repository for the first build.</span>
-git clone https://github.com/JulianKingman/Kill-email</pre>
-    </div>
+  <section id="waitlist" aria-labelledby="waitlist-title">
+    <h2 id="waitlist-title">Join the waitlist</h2>
+    <form class="waitlist" id="waitlist-form" novalidate>
+      <label for="wl-email">Email for the release announcement</label>
+      <div class="wl-row">
+        <input id="wl-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" maxlength="254">
+        <button class="btn" type="submit" id="wl-submit">Enlist</button>
+      </div>
+      <div class="hp" aria-hidden="true">
+        <label for="wl-company">Company</label>
+        <input id="wl-company" name="company" type="text" tabindex="-1" autocomplete="off">
+      </div>
+      <p class="wl-status" id="wl-status" role="status"></p>
+      <p class="wl-fine">One email when the first build ships. No tracking, no newsletter, and yes, we see the irony. The code is public on <a href="https://github.com/JulianKingman/Kill-email">GitHub</a>.</p>
+    </form>
   </section>
 
   <footer>
@@ -469,7 +503,32 @@ git clone https://github.com/JulianKingman/Kill-email</pre>
   grain();
   if (!reduced) setInterval(function () { if (body.classList.contains('crt')) grain(); }, 120);
 
-  // Demo: run the sweep over the example senders
+  // Waitlist
+  var form = document.getElementById('waitlist-form');
+  var statusEl = document.getElementById('wl-status');
+  var submit = document.getElementById('wl-submit');
+  function status(text, kind) { statusEl.textContent = text; statusEl.className = 'wl-status ' + (kind || ''); }
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = document.getElementById('wl-email').value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { status('Enter a full email address, like you@example.com.', 'err'); return; }
+    submit.disabled = true;
+    status('Transmitting...');
+    fetch('/api/waitlist', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: email, company: document.getElementById('wl-company').value })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) { return { ok: r.ok, body: body }; });
+    }).then(function (res) {
+      if (res.ok) { status('Enlisted. We will email you once, when it ships.', 'ok'); form.reset(); }
+      else status(res.body.error || 'Could not sign you up. Try again later.', 'err');
+    }).catch(function () {
+      status('Could not reach the server. Check your connection and try again.', 'err');
+    }).then(function () { submit.disabled = false; });
+  });
+
+  // Demo: run the Kill List over the example senders
   var run = document.getElementById('run');
   var killedEl = document.getElementById('killed');
   var unsubEl = document.getElementById('unsubbed');
