@@ -68,7 +68,7 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
   provider: 'anthropic',
   apiKey: '',
   fastModel: 'claude-haiku-4-5',
-  smartModel: 'claude-opus-5',
+  smartModel: 'claude-opus-5-5',
   escalationThreshold: 0.7,
   batchSize: 10,
   maxTokensPerEmail: 500,
@@ -77,7 +77,7 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
 // Model IDs that earlier versions saved to the config file, mapped to their replacements
 export const RETIRED_MODELS: Record<string, string> = {
   'claude-3-5-haiku-20241022': 'claude-haiku-4-5',
-  'claude-sonnet-4-20250514': 'claude-opus-5',
+  'claude-sonnet-4-20250514': 'claude-opus-5-5',
 };
 
 export const DEFAULT_CLASSIFIER_CONFIG: ClassifierConfig = {

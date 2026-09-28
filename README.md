@@ -79,7 +79,7 @@ Emails go through three tiers. Each tier only sees what the one before could not
 
 1. **Rules**: blocked and trusted domains, receipt keywords, old promotions
 2. **First-pass classifier**: Claude (`claude-haiku-4-5`) by default, or a *system-one* decision model
-3. **Escalation**: low-confidence answers go to `claude-opus-5`, then to you
+3. **Escalation**: low-confidence answers go to `claude-opus-5-5`, then to you
 
 A system-one model returns a category and calibrated probabilities instead of generating text, so it is much faster and cheaper per email. Two servers speak the same `/v1/systemone` API:
 
