@@ -4,7 +4,7 @@
  */
 
 import Imap from 'imap';
-import { simpleParser, ParsedMail } from 'mailparser';
+import { simpleParser, ParsedMail, AddressObject } from 'mailparser';
 import { EventEmitter } from 'events';
 import { EmailMessage, EmailAddress, Attachment, EmailConnectionConfig } from '../types';
 
@@ -247,10 +247,10 @@ export class ImapClient extends EventEmitter {
     uid: number,
     attributes: any
   ): EmailMessage {
-    const extractAddresses = (addr: any): EmailAddress[] => {
+    const extractAddresses = (addr?: AddressObject | AddressObject[]): EmailAddress[] => {
       if (!addr) return [];
-      const addrs = Array.isArray(addr) ? addr : [addr];
-      return addrs.map((a: any) => ({
+      const objects = Array.isArray(addr) ? addr : [addr];
+      return objects.flatMap((o) => o.value).map((a) => ({
         name: a.name,
         address: a.address || '',
       }));
@@ -262,9 +262,9 @@ export class ImapClient extends EventEmitter {
       id: String(uid),
       uid,
       messageId: parsed.messageId || '',
-      from: extractAddresses(parsed.from?.value),
-      to: extractAddresses(parsed.to?.value),
-      cc: extractAddresses(parsed.cc?.value),
+      from: extractAddresses(parsed.from),
+      to: extractAddresses(parsed.to),
+      cc: extractAddresses(parsed.cc),
       subject: parsed.subject || '(no subject)',
       date: parsed.date || new Date(),
       snippet: (parsed.text || '').substring(0, 200),

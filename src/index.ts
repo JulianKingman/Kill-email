@@ -100,8 +100,11 @@ class KillAllEmail {
       return;
     }
 
-    if (!status.llmConfigured) {
-      renderer.showError('API key not configured', 'Please set your Anthropic API key first');
+    if (!status.classifierConfigured) {
+      renderer.showError(
+        'Classifier not configured',
+        'Set your Anthropic API key, or point SYSTEMONE_BASE_URL at a Jev or Laya server'
+      );
       return;
     }
 
@@ -125,12 +128,7 @@ class KillAllEmail {
           email: EmailMessage,
           decision: CategoryDecision
         ): Promise<EmailFate> => {
-          // Generate questions for this email
-          const questions = [
-            'Is this email important for future reference?',
-            'Would you miss this if it were deleted?',
-            'Does this contain information you might need later?',
-          ];
+          const questions = await engine.reviewQuestions(email);
 
           return humanReviewPrompt(
             {
@@ -200,6 +198,12 @@ class KillAllEmail {
     console.log(
       chalk.gray(`  API Key: ${status.llmConfigured ? chalk.green('Configured') : chalk.red('Not configured')}`)
     );
+    const { classifier } = this.configManager.getConfig();
+    console.log(
+      chalk.gray(
+        `  Classifier: ${classifier.primary === 'system-one' ? `system-one (${classifier.systemOne.baseUrl})` : 'Claude'}`
+      )
+    );
     console.log();
 
     // Show current settings
@@ -244,7 +248,11 @@ Options:
   --limit <number>        Limit emails to process
 
 Environment Variables:
-  ANTHROPIC_API_KEY       Set API key
+  ANTHROPIC_API_KEY       Anthropic API key (used for this run, not saved)
+  KILL_EMAIL_CLASSIFIER   First-pass classifier: claude or system-one
+  SYSTEMONE_BASE_URL      Jev or Laya server URL (default http://localhost:8000)
+  SYSTEMONE_API_KEY       Bearer token for that server
+  SYSTEMONE_MODEL         Model name to request from that server
   KILL_EMAIL_THEME        Set theme (terminator, matrix, amber, green)
 `);
     return;
@@ -262,12 +270,8 @@ Environment Variables:
     return;
   }
 
-  // Check for environment variables
+  // API keys and classifier settings from the environment are read per run by ConfigManager
   const configManager = getConfigManager();
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    configManager.setApiKey(process.env.ANTHROPIC_API_KEY);
-  }
 
   if (process.env.KILL_EMAIL_THEME) {
     const ui = configManager.get('ui');

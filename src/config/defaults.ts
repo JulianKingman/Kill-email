@@ -11,6 +11,7 @@ import {
   LLMConfig,
   UIConfig,
   CategoryConfig,
+  ClassifierConfig,
 } from '../types';
 
 export const DEFAULT_SMART_KNOBS: SmartKnobs = {
@@ -66,12 +67,26 @@ export const DEFAULT_PROCESSING_CONFIG: ProcessingConfig = {
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
   provider: 'anthropic',
   apiKey: '',
-  fastModel: 'claude-3-5-haiku-20241022',
-  smartModel: 'claude-sonnet-4-20250514',
+  fastModel: 'claude-haiku-4-5',
+  smartModel: 'claude-opus-5',
   escalationThreshold: 0.7,
   batchSize: 10,
   maxTokensPerEmail: 500,
-  temperature: 0.3,
+};
+
+// Model IDs that earlier versions saved to the config file, mapped to their replacements
+export const RETIRED_MODELS: Record<string, string> = {
+  'claude-3-5-haiku-20241022': 'claude-haiku-4-5',
+  'claude-sonnet-4-20250514': 'claude-opus-5',
+};
+
+export const DEFAULT_CLASSIFIER_CONFIG: ClassifierConfig = {
+  primary: 'claude',
+  systemOne: {
+    baseUrl: 'http://localhost:8000', // `laya-serve` default
+    concurrency: 4,
+    timeoutMs: 30000,
+  },
 };
 
 export const DEFAULT_UI_CONFIG: UIConfig = {
@@ -123,6 +138,7 @@ export const DEFAULT_CONFIG: Partial<KillEmailConfig> = {
   processing: DEFAULT_PROCESSING_CONFIG,
   categories: DEFAULT_CATEGORY_CONFIG,
   ui: DEFAULT_UI_CONFIG,
+  classifier: DEFAULT_CLASSIFIER_CONFIG,
 };
 
 // Preset configurations for different user types

@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+build-test/
 
 # Configuration (may contain secrets)
 .kill-email-config.json
