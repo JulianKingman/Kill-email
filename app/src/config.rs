@@ -20,12 +20,23 @@ pub struct Config {
 pub struct Prefs {
     /// Marking a sender for deletion also marks it for unsubscribing
     pub unsubscribe_with_delete: bool,
+    pub icons: IconSet,
+}
+
+/// Plain symbols work everywhere; Nerd Font icons need a Nerd Font in the terminal
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IconSet {
+    #[default]
+    Symbols,
+    NerdFont,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
         Self {
             unsubscribe_with_delete: true,
+            icons: IconSet::Symbols,
         }
     }
 }

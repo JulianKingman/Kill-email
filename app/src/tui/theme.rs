@@ -1,5 +1,6 @@
 //! The killall.email palette, for terminals with true color.
 
+use crate::config::IconSet;
 use ratatui::style::{Color, Modifier, Style};
 
 pub const VOID: Color = Color::Rgb(11, 3, 4);
@@ -48,7 +49,26 @@ pub const LOGO: [&str; 6] = [
 /// The Target Lock mark in text: an envelope inside corner brackets
 pub const MARK: &str = "⌜✉⌟";
 
-/// Marks a sender whose mail goes to Trash
-pub const KILL: &str = "✖";
-/// Marks a sender to unsubscribe from: the sender, eliminated. Two columns wide.
-pub const LEAVE: &str = "🚷";
+/// The two marks a sender can carry, one column each
+#[derive(Clone, Copy)]
+pub struct Icons {
+    /// Its mail goes to Trash
+    pub kill: &'static str,
+    /// Unsubscribe from it
+    pub leave: &'static str,
+}
+
+pub fn icons(set: IconSet) -> Icons {
+    match set {
+        // Both are in common coding fonts, so the terminal doesn't substitute them
+        IconSet::Symbols => Icons {
+            kill: "✕",
+            leave: "⊘",
+        },
+        // Font Awesome glyphs in Nerd Fonts: trash can, and a person crossed out
+        IconSet::NerdFont => Icons {
+            kill: "\u{f1f8}",
+            leave: "\u{f235}",
+        },
+    }
+}

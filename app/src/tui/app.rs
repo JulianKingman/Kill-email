@@ -60,9 +60,9 @@ pub struct App {
     pub folder: String,
     pub groups: Vec<SenderGroup>,
     pub table: TableState,
-    /// Senders marked ✖: their mail goes to Trash
+    /// Senders marked kill: their mail goes to Trash
     pub marked: HashSet<String>,
-    /// Senders marked 🚷: unsubscribe from them
+    /// Senders marked unsubscribe
     pub leaving: HashSet<String>,
     pub sort: SortBy,
     pub progress: Progress,
@@ -590,7 +590,7 @@ impl App {
         Vec::new()
     }
 
-    /// Space: mark or unmark ✖ (and 🚷 along with it, if that setting is on)
+    /// Space: mark or unmark kill (and unsubscribe along with it, if that setting is on)
     fn toggle_mark(&mut self) {
         let Some(g) = self.selected() else { return };
         let address = g.address.clone();
@@ -623,7 +623,7 @@ impl App {
         self.advance();
     }
 
-    /// n: mark or unmark 🚷 on its own. Works on protected senders too:
+    /// n: mark or unmark unsubscribe on its own. Works on protected senders too:
     /// you may want to keep someone's old mail but stop their newsletter.
     fn toggle_leaving(&mut self) {
         let Some(g) = self.selected() else { return };
@@ -872,7 +872,7 @@ mod tests {
         press(&mut app, KeyCode::Char('n'));
         assert!(app.leaving.is_empty());
         press(&mut app, KeyCode::Char(' '));
-        assert!(app.leaving.is_empty(), "space only marks ✖ here");
+        assert!(app.leaving.is_empty(), "space only marks kill here");
         assert_eq!(app.marked.len(), 1);
     }
 

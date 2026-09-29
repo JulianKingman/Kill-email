@@ -46,7 +46,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             modal(f, area, " UNDO ", text, "y restore   n cancel");
         }
         Mode::Working => draw_working(f, area, app),
-        Mode::Help => draw_help(f, area),
+        Mode::Help => draw_help(f, area, app),
         Mode::Setup => app.setup.draw(f, body, app.tick),
         Mode::Settings => app
             .settings
@@ -197,11 +197,12 @@ fn draw_board(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
+    let icons = theme::icons(app.config.prefs.icons);
     let header = Row::new([
         Line::from(vec![
-            Span::styled(theme::KILL, Style::new().fg(PHOSPHOR)),
+            Span::styled(icons.kill, Style::new().fg(PHOSPHOR)),
             Span::raw(" "),
-            Span::raw(theme::LEAVE),
+            Span::styled(icons.leave, Style::new().fg(AMBER)),
         ]),
         Line::from("SENDER"),
         Line::from("EMAILS"),
@@ -224,18 +225,18 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
             // A dim dot where a mark could go, nothing where it can't
             let dot = Style::new().fg(EMBER);
             let kill = if marked {
-                Span::styled(theme::KILL, Style::new().fg(PHOSPHOR).bold())
+                Span::styled(icons.kill, Style::new().fg(PHOSPHOR).bold())
             } else if g.protected.is_none() && !g.targets.is_empty() {
                 Span::styled("·", dot)
             } else {
                 Span::raw(" ")
             };
             let leave = if leaving {
-                Span::raw(theme::LEAVE)
+                Span::styled(icons.leave, Style::new().fg(AMBER).bold())
             } else if can_leave(g) {
-                Span::styled("· ", dot)
+                Span::styled("·", dot)
             } else {
-                Span::raw("  ")
+                Span::raw(" ")
             };
             let fg = if marked || leaving {
                 AMBER
@@ -264,7 +265,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     let widths = [
-        Constraint::Length(4),
+        Constraint::Length(3),
         Constraint::Fill(3),
         Constraint::Length(7),
         Constraint::Length(5),
@@ -304,14 +305,14 @@ fn verdict(g: &SenderGroup) -> (String, ratatui::style::Color) {
     if held > 0 {
         (
             format!(
-                "✖ {} · {} kept",
+                "✕ {} · {} kept",
                 thousands(g.targets.len()),
                 thousands(held)
             ),
             PHOSPHOR,
         )
     } else {
-        (format!("✖ {}", thousands(g.targets.len())), PHOSPHOR)
+        (format!("✕ {}", thousands(g.targets.len())), PHOSPHOR)
     }
 }
 
@@ -435,6 +436,7 @@ fn truncate(s: &str, width: usize) -> String {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
+    let icons = theme::icons(app.config.prefs.icons);
     let [status, keys] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(2)]).areas(area);
 
@@ -451,7 +453,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         None if !app.marked.is_empty() || !app.leaving.is_empty() => {
             let mut spans = vec![Span::raw(" ")];
             if !app.marked.is_empty() {
-                spans.push(Span::styled(theme::KILL, Style::new().fg(PHOSPHOR).bold()));
+                spans.push(Span::styled(icons.kill, Style::new().fg(PHOSPHOR).bold()));
                 spans.push(Span::styled(
                     format!(
                         " {senders} to kill: {} messages, {}   ",
@@ -463,7 +465,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             }
             let leavers = app.leavers().len();
             if leavers > 0 {
-                spans.push(Span::raw(theme::LEAVE));
+                spans.push(Span::styled(icons.leave, Style::new().fg(AMBER).bold()));
                 spans.push(Span::styled(
                     format!(" {leavers} to unsubscribe from   "),
                     Style::new().fg(AMBER),
@@ -484,11 +486,13 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     };
     f.render_widget(Paragraph::new(status_line), status);
 
+    let kill_hint = format!("{} kill", icons.kill);
+    let leave_hint = format!("{} unsubscribe", icons.leave);
     let hints: &[(&str, &str)] = match app.mode {
         Mode::Board => &[
             ("↑↓", "move"),
-            ("space", "✖ kill"),
-            ("n", "🚷 unsubscribe"),
+            ("space", &kill_hint),
+            ("n", &leave_hint),
             ("enter", "execute"),
             ("u", "undo"),
             ("s", "sort"),
@@ -513,6 +517,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
+    let icons = theme::icons(app.config.prefs.icons);
     let doomed = app.chosen();
     let leavers = app.leavers();
     let (_, messages, bytes) = app.chosen_totals();
@@ -531,7 +536,7 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
     let mut text = Vec::new();
     if !doomed.is_empty() {
         text.push(Line::from(vec![
-            Span::styled(theme::KILL, Style::new().fg(PHOSPHOR).bold()),
+            Span::styled(icons.kill, Style::new().fg(PHOSPHOR).bold()),
             Span::styled(
                 format!(
                     " Trash {} messages from {} sender{}",
@@ -558,7 +563,7 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
     }
     if !leavers.is_empty() {
         text.push(Line::from(vec![
-            Span::raw(theme::LEAVE),
+            Span::styled(icons.leave, Style::new().fg(AMBER).bold()),
             Span::styled(
                 format!(
                     " Unsubscribe from {} sender{}",
@@ -627,21 +632,27 @@ fn draw_working(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(March { tick: app.tick }, inner);
 }
 
-fn draw_help(f: &mut Frame, area: Rect) {
-    let rows = [
-        ("space", "mark or unmark the sender"),
+fn draw_help(f: &mut Frame, area: Rect, app: &App) {
+    let icons = theme::icons(app.config.prefs.icons);
+    let kill = format!(
+        "{} kill: the sender's mail goes to Trash (and {} too)",
+        icons.kill, icons.leave
+    );
+    let leave = format!(
+        "{} unsubscribe only, or take the {} off a killed sender",
+        icons.leave, icons.leave
+    );
+    let rows: [(&str, &str); 8] = [
+        ("space", &kill),
+        ("n", &leave),
         (
-            "enter / d",
-            "terminate marked senders (or the highlighted one)",
-        ),
-        (
-            "n",
-            "unsubscribe from marked senders (or the highlighted one)",
+            "enter",
+            "execute everything marked (or the highlighted sender)",
         ),
         ("u", "undo the last termination"),
         ("s", "sort: most mail, least read, oldest"),
         ("r", "rescan the inbox"),
-        (",", "settings: account, what to protect, how much to scan"),
+        (",", "settings: account, what to protect, icons"),
         ("q", "quit"),
     ];
     let mut text: Vec<Line> = rows

@@ -34,12 +34,14 @@ The first run asks where your mail is (Gmail, iCloud, Yahoo, Fastmail or any IMA
 
 Go down the list once, marking each sender:
 
-- `space` marks it ✖ **kill**: its mail goes to Trash. It also marks it 🚷 **unsubscribe** if the sender offers a way out.
-- `n` switches 🚷 on or off: press it after `space` for kill only, or on its own to unsubscribe only. That works on protected senders too.
+- `space` marks it ✕ **kill**: its mail goes to Trash. It also marks it ⊘ **unsubscribe** if the sender offers a way out.
+- `n` switches ⊘ on or off: press it after `space` for kill only, or on its own to unsubscribe only. That works on protected senders too.
 - Both move to the next sender. A dim dot shows where a mark could go.
 - `enter` shows everything marked on one confirm screen; `y` does it all. With nothing marked, it acts on the highlighted sender.
 
-Other keys: `u` undo the last batch, `s` sort, `r` rescan, `,` settings, `?` help, `q` quit. If you'd rather `space` didn't unsubscribe too, turn off "Space also unsubscribes" in settings.
+Other keys: `u` undo the last batch, `s` sort, `r` rescan, `,` settings, `?` help, `q` quit.
+
+In settings you can turn off "Unsubscribe on kill", and switch the icons to a trash can and a crossed-out person if your terminal uses a [Nerd Font](https://www.nerdfonts.com).
 
 The right-hand pane shows the highlighted sender's newest messages (unread ones marked with a dot) so you can see what you're about to delete.
 

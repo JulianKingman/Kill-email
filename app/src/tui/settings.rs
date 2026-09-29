@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Wrap};
 
 use super::input::Input;
 use super::theme::{self, ALIVE, AMBER, BONE, PHOSPHOR, VOID};
-use crate::config::Config;
+use crate::config::{Config, IconSet};
 
 const RECENT_DAYS: [u32; 7] = [3, 7, 14, 30, 60, 90, 180];
 const SCAN_LIMITS: [usize; 6] = [0, 1_000, 5_000, 10_000, 25_000, 50_000];
@@ -21,15 +21,17 @@ enum Item {
     ScanLimit,
     Trusted,
     AutoLeave,
+    Icons,
     Password,
 }
 
-const ITEMS: [Item; 6] = [
+const ITEMS: [Item; 7] = [
     Item::Account,
     Item::Recent,
     Item::ScanLimit,
     Item::Trusted,
     Item::AutoLeave,
+    Item::Icons,
     Item::Password,
 ];
 
@@ -155,6 +157,10 @@ impl Settings {
                     config.prefs.unsubscribe_with_delete = !config.prefs.unsubscribe_with_delete;
                     self.prefs_changed = true;
                 }
+                Item::Icons => {
+                    config.prefs.icons = next_icons(config.prefs.icons);
+                    self.prefs_changed = true;
+                }
                 _ => {}
             },
             _ => {}
@@ -178,6 +184,7 @@ impl Settings {
         };
         let value = |s: String| Span::styled(s, Style::new().fg(BONE));
         let hint = |s: &str| Span::styled(format!("  {s}"), theme::muted());
+        let icons = theme::icons(config.prefs.icons);
 
         let mut lines = Vec::new();
         for (i, item) in ITEMS.iter().enumerate() {
@@ -217,13 +224,28 @@ impl Settings {
                     hint("enter to edit"),
                 ]),
                 Item::AutoLeave => Line::from(vec![
-                    label("Space also unsubscribes", on),
+                    label("Unsubscribe on kill", on),
                     value(if config.prefs.unsubscribe_with_delete {
                         "◀ yes ▶".into()
                     } else {
                         "◀ no ▶".into()
                     }),
-                    hint("✖ marks 🚷 too"),
+                    hint(&format!("{} marks {} too", icons.kill, icons.leave)),
+                ]),
+                Item::Icons => Line::from(vec![
+                    label("Icons", on),
+                    value(match config.prefs.icons {
+                        IconSet::Symbols => "◀ symbols ▶".into(),
+                        IconSet::NerdFont => "◀ Nerd Font ▶".into(),
+                    }),
+                    hint(&match config.prefs.icons {
+                        IconSet::Symbols => {
+                            format!("{} kill  {} unsubscribe", icons.kill, icons.leave)
+                        }
+                        IconSet::NerdFont => {
+                            format!("{} {}  needs a Nerd Font", icons.kill, icons.leave)
+                        }
+                    }),
                 ]),
                 Item::Password => Line::from(vec![
                     label("Password", on),
@@ -305,6 +327,13 @@ impl Settings {
             .vertical_margin(1)
             .areas(inner);
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), text_area);
+    }
+}
+
+fn next_icons(set: IconSet) -> IconSet {
+    match set {
+        IconSet::Symbols => IconSet::NerdFont,
+        IconSet::NerdFont => IconSet::Symbols,
     }
 }
 

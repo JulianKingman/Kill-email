@@ -1,5 +1,5 @@
 //! Render the demo board to HTML for screenshots: `cargo run --example snapshot -- 120 36 board > out.html`
-//! Screens: board, confirm, after, scanning, working, help, setup, setup-form, settings. Optional 4th argument: animation tick.
+//! Screens: board, confirm, after, scanning, working, help, setup, setup-form, settings. Optional 4th argument: animation tick; 5th `nerd` for Nerd Font icons.
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -23,6 +23,7 @@ fn main() {
     let height: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(36);
     let screen = args.get(3).map(String::as_str).unwrap_or("board");
     let tick: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let nerd = args.get(5).is_some_and(|s| s == "nerd");
 
     let config = kill_email::config::Config::new_account(
         "imap.gmail.com",
@@ -30,6 +31,10 @@ fn main() {
         "you@example.com",
         kill_email::config::Security::Tls,
     );
+    let mut config = config;
+    if nerd {
+        config.prefs.icons = kill_email::config::IconSet::NerdFont;
+    }
     let mut app = if screen.starts_with("setup") {
         App::needs_setup(Setup::new(None), None, false, None)
     } else {
