@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Cell, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
-use super::app::{App, Mode, Plan, Tone};
+use super::app::{App, Mode, Tone, can_leave};
 use super::march::{self, March};
 use super::theme::{self, ALIVE, AMBER, ASH, BONE, EMBER, LOGO, MARK, PHOSPHOR, VOID};
 use crate::senders::SenderGroup;
@@ -32,7 +32,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, footer, app);
 
     match &app.mode {
-        Mode::Confirm(plan) => draw_confirm(f, area, app, *plan),
+        Mode::Confirm => draw_confirm(f, area, app),
         Mode::ConfirmUndo(batch) => {
             let text = vec![
                 Line::from(format!(
@@ -197,9 +197,21 @@ fn draw_board(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
-    let header = Row::new(["", "SENDER", "EMAILS", "READ", "LAST", "UNSUB", "VERDICT"])
-        .style(Style::new().fg(ASH).add_modifier(Modifier::BOLD))
-        .bottom_margin(0);
+    let header = Row::new([
+        Line::from(vec![
+            Span::styled(theme::KILL, Style::new().fg(PHOSPHOR)),
+            Span::raw(" "),
+            Span::raw(theme::LEAVE),
+        ]),
+        Line::from("SENDER"),
+        Line::from("EMAILS"),
+        Line::from("READ"),
+        Line::from("LAST"),
+        Line::from("UNSUB"),
+        Line::from("VERDICT"),
+    ])
+    .style(Style::new().fg(ASH).add_modifier(Modifier::BOLD))
+    .bottom_margin(0);
 
     let rows: Vec<Row> = app
         .groups
@@ -207,8 +219,25 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         .enumerate()
         .map(|(i, g)| {
             let marked = app.marked.contains(&g.address);
+            let leaving = app.leaving.contains(&g.address);
             let (verdict, color) = verdict(g);
-            let fg = if marked {
+            // A dim dot where a mark could go, nothing where it can't
+            let dot = Style::new().fg(EMBER);
+            let kill = if marked {
+                Span::styled(theme::KILL, Style::new().fg(PHOSPHOR).bold())
+            } else if g.protected.is_none() && !g.targets.is_empty() {
+                Span::styled("·", dot)
+            } else {
+                Span::raw(" ")
+            };
+            let leave = if leaving {
+                Span::raw(theme::LEAVE)
+            } else if can_leave(g) {
+                Span::styled("· ", dot)
+            } else {
+                Span::raw("  ")
+            };
+            let fg = if marked || leaving {
                 AMBER
             } else if g.protected.is_some() {
                 ALIVE
@@ -216,7 +245,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 BONE
             };
             Row::new(vec![
-                Cell::from(if marked { "[x]" } else { "[ ]" }),
+                Cell::from(Line::from(vec![kill, Span::raw(" "), leave])),
                 Cell::from(g.display_name().to_string()),
                 Cell::from(Line::from(thousands(g.total)).alignment(Alignment::Right)),
                 Cell::from(Line::from(format!("{}%", g.read_pct())).alignment(Alignment::Right)),
@@ -235,7 +264,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     let widths = [
-        Constraint::Length(3),
+        Constraint::Length(4),
         Constraint::Fill(3),
         Constraint::Length(7),
         Constraint::Length(5),
@@ -419,14 +448,30 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             };
             Line::from(Span::styled(format!(" {text}"), Style::new().fg(color)))
         }
-        None if !app.marked.is_empty() => Line::from(Span::styled(
-            format!(
-                " Marked {senders} senders: {} messages, {}",
-                thousands(messages),
-                megabytes(bytes)
-            ),
-            Style::new().fg(AMBER),
-        )),
+        None if !app.marked.is_empty() || !app.leaving.is_empty() => {
+            let mut spans = vec![Span::raw(" ")];
+            if !app.marked.is_empty() {
+                spans.push(Span::styled(theme::KILL, Style::new().fg(PHOSPHOR).bold()));
+                spans.push(Span::styled(
+                    format!(
+                        " {senders} to kill: {} messages, {}   ",
+                        thousands(messages),
+                        megabytes(bytes)
+                    ),
+                    Style::new().fg(AMBER),
+                ));
+            }
+            let leavers = app.leavers().len();
+            if leavers > 0 {
+                spans.push(Span::raw(theme::LEAVE));
+                spans.push(Span::styled(
+                    format!(" {leavers} to unsubscribe from   "),
+                    Style::new().fg(AMBER),
+                ));
+            }
+            spans.push(Span::styled("enter to execute", theme::key()));
+            Line::from(spans)
+        }
         None if app.messages > 0 => Line::from(Span::styled(
             format!(
                 " {} senders · learned {} people you write to from Sent",
@@ -442,9 +487,9 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let hints: &[(&str, &str)] = match app.mode {
         Mode::Board => &[
             ("↑↓", "move"),
-            ("space", "mark"),
-            ("enter", "terminate"),
-            ("n", "unsubscribe"),
+            ("space", "✖ kill"),
+            ("n", "🚷 unsubscribe"),
+            ("enter", "execute"),
             ("u", "undo"),
             ("s", "sort"),
             ("r", "rescan"),
@@ -467,75 +512,76 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), keys);
 }
 
-fn draw_confirm(f: &mut Frame, area: Rect, app: &App, plan: Plan) {
-    let targets = app.targets_for(plan);
-    let leavers = app.leavers(plan);
+fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
+    let doomed = app.chosen();
+    let leavers = app.leavers();
     let (_, messages, bytes) = app.chosen_totals();
-    let senders = targets.len();
-    let s = |n: usize| if n == 1 { "" } else { "s" };
-
-    let title = if plan.trash {
-        format!(
-            "Terminate {} messages from {senders} sender{}?",
-            thousands(messages),
-            s(senders)
-        )
-    } else {
-        format!(
-            "Unsubscribe from {} sender{}?",
-            leavers.len(),
-            s(leavers.len())
-        )
-    };
-    let mut text = vec![
-        Line::from(Span::styled(title, Style::new().fg(BONE).bold())),
-        Line::from(""),
-    ];
-    let shown: Vec<&&SenderGroup> = if plan.trash {
-        targets.iter().take(4).collect()
-    } else {
-        leavers.iter().take(4).collect()
-    };
-    let listed = if plan.trash { senders } else { leavers.len() };
-    for g in &shown {
-        text.push(Line::from(format!("  ✖ {}", g.display_name())).style(Style::new().fg(PHOSPHOR)));
-    }
-    if listed > shown.len() {
-        text.push(Line::from(format!("  and {} more", listed - shown.len())).style(theme::muted()));
-    }
-    text.push(Line::from(""));
-
-    if plan.trash {
-        if leavers.is_empty() {
-            text.push(
-                Line::from("No way to unsubscribe from these senders.").style(theme::muted()),
-            );
-        } else {
-            let (mark, color) = if plan.unsubscribe {
-                ("[x]", AMBER)
-            } else {
-                ("[ ]", ASH)
-            };
-            text.push(Line::from(vec![
-                Span::styled(format!("{mark} "), Style::new().fg(color).bold()),
-                Span::styled(
-                    format!("Unsubscribe from {} of them too", leavers.len()),
-                    Style::new().fg(color),
-                ),
-                Span::styled("   t toggles", theme::key()),
-            ]));
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let list = |text: &mut Vec<Line>, groups: &[&SenderGroup]| {
+        for g in groups.iter().take(4) {
+            text.push(Line::from(format!("    {}", g.display_name())).style(Style::new().fg(BONE)));
         }
+        if groups.len() > 4 {
+            text.push(
+                Line::from(format!("    and {} more", groups.len() - 4)).style(theme::muted()),
+            );
+        }
+    };
+
+    let mut text = Vec::new();
+    if !doomed.is_empty() {
+        text.push(Line::from(vec![
+            Span::styled(theme::KILL, Style::new().fg(PHOSPHOR).bold()),
+            Span::styled(
+                format!(
+                    " Trash {} messages from {} sender{}",
+                    thousands(messages),
+                    doomed.len(),
+                    plural(doomed.len())
+                ),
+                Style::new().fg(BONE).bold(),
+            ),
+        ]));
+        list(&mut text, &doomed);
+        text.push(
+            Line::from(if app.dry_run {
+                "    Dry run: nothing will be moved.".to_string()
+            } else {
+                format!(
+                    "    Frees about {}. Press u afterwards to put it back.",
+                    megabytes(bytes)
+                )
+            })
+            .style(theme::muted()),
+        );
+        text.push(Line::from(""));
     }
-    if plan.unsubscribe && !leavers.is_empty() {
+    if !leavers.is_empty() {
+        text.push(Line::from(vec![
+            Span::raw(theme::LEAVE),
+            Span::styled(
+                format!(
+                    " Unsubscribe from {} sender{}",
+                    leavers.len(),
+                    plural(leavers.len())
+                ),
+                Style::new().fg(BONE).bold(),
+            ),
+        ]));
+        list(&mut text, &leavers);
         let mut click = 0;
         let mut email = 0;
         let mut page = 0;
+        let smtp = app.demo || app.config.account.smtp_server().is_some();
         for g in &leavers {
-            match g.unsubscribe.label() {
-                "1-click" => click += 1,
-                "mailto" if app.config.account.smtp_server().is_some() || app.demo => email += 1,
-                _ if g.unsubscribe.https.is_some() => page += 1,
-                _ => email += 1,
+            if g.unsubscribe.one_click {
+                click += 1;
+            } else if g.unsubscribe.mailto.is_some() && smtp {
+                email += 1;
+            } else if g.unsubscribe.https.is_some() {
+                page += 1;
+            } else {
+                email += 1;
             }
         }
         let mut how = Vec::new();
@@ -543,45 +589,19 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App, plan: Plan) {
             how.push(format!("{click} by one click"));
         }
         if email > 0 {
-            how.push(format!("{email} by email from your account"));
+            how.push(format!("{email} by email"));
         }
         if page > 0 {
-            how.push(format!("{page} open in your browser to finish"));
+            how.push(format!("{page} in your browser"));
         }
-        let indent = if plan.trash { "    " } else { "" };
-        text.push(Line::from(format!("{indent}{}", how.join(", "))).style(theme::muted()));
-    }
-    if plan.trash {
-        text.push(Line::from(""));
-        if app.dry_run {
-            text.push(
-                Line::from("Dry run: nothing will be moved or sent.").style(Style::new().fg(AMBER)),
-            );
+        let tail = if app.dry_run {
+            "Dry run: nothing will be sent."
         } else {
-            text.push(
-                Line::from(format!(
-                    "Frees about {}. Mail goes to Trash; press u, or run",
-                    megabytes(bytes)
-                ))
-                .style(theme::muted()),
-            );
-            text.push(Line::from("`kill-email undo`, to put it back.").style(theme::muted()));
-        }
-    } else if app.dry_run {
-        text.push(Line::from("Dry run: nothing will be sent.").style(Style::new().fg(AMBER)));
-    } else {
-        text.push(Line::from(""));
-        text.push(
-            Line::from("Their mail stays where it is. Unsubscribing can't be undone.")
-                .style(theme::muted()),
-        );
+            "Can't be undone."
+        };
+        text.push(Line::from(format!("    {}. {tail}", how.join(", "))).style(theme::muted()));
     }
-    let heading = if plan.trash {
-        " CONFIRM TERMINATION "
-    } else {
-        " CONFIRM UNSUBSCRIBE "
-    };
-    modal(f, area, heading, text, "y execute   n cancel");
+    modal(f, area, " CONFIRM ", text, "y execute   n cancel");
 }
 
 fn draw_working(f: &mut Frame, area: Rect, app: &App) {

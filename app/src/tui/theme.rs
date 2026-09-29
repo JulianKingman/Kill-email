@@ -47,3 +47,8 @@ pub const LOGO: [&str; 6] = [
 
 /// The Target Lock mark in text: an envelope inside corner brackets
 pub const MARK: &str = "⌜✉⌟";
+
+/// Marks a sender whose mail goes to Trash
+pub const KILL: &str = "✖";
+/// Marks a sender to unsubscribe from: the sender, eliminated. Two columns wide.
+pub const LEAVE: &str = "🚷";

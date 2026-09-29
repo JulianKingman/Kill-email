@@ -1,5 +1,5 @@
 //! Render the demo board to HTML for screenshots: `cargo run --example snapshot -- 120 36 board > out.html`
-//! Screens: board, confirm, unsubscribe, after, scanning, working, help, setup, setup-form, settings. Optional 4th argument: animation tick.
+//! Screens: board, confirm, after, scanning, working, help, setup, setup-form, settings. Optional 4th argument: animation tick.
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -52,14 +52,18 @@ fn main() {
             messages: msgs.len(),
             correspondents: 2,
         }));
-        app.on_key(KeyEvent::from(KeyCode::Char(' ')));
-        app.on_key(KeyEvent::from(KeyCode::Char(' ')));
+        // SocialNet and ShopMart: both marks. The Daily Brief: unsubscribe only.
+        // RideShare: kill only.
+        for key in [' ', ' ', 'n', ' '] {
+            app.on_key(KeyEvent::from(KeyCode::Char(key)));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Up));
+        app.on_key(KeyEvent::from(KeyCode::Char('n')));
+        app.on_key(KeyEvent::from(KeyCode::Up));
+        app.status = None;
         match screen {
             "confirm" => {
                 app.on_key(KeyEvent::from(KeyCode::Enter));
-            }
-            "unsubscribe" => {
-                app.on_key(KeyEvent::from(KeyCode::Char('n')));
             }
             "after" => {
                 app.on_key(KeyEvent::from(KeyCode::Enter));
@@ -70,17 +74,17 @@ fn main() {
                 app.on_update(Update::Killed(Killed {
                     terminated: Some(Terminated {
                         batch: "demo".into(),
-                        messages: kill.groups.iter().map(|g| g.targets.len()).sum(),
-                        senders: kill.groups.len(),
+                        messages: kill.trash.iter().map(|g| g.targets.len()).sum(),
+                        senders: kill.trash.len(),
                         trashed: kill
-                            .groups
+                            .trash
                             .iter()
                             .map(|g| (g.address.clone(), g.targets.len()))
                             .collect(),
                         dry_run: false,
                     }),
                     unsubscribed: kill
-                        .groups
+                        .unsubscribe
                         .iter()
                         .map(|g| Unsubscribed {
                             sender: g.address.clone(),
@@ -135,8 +139,18 @@ fn main() {
          span{white-space:pre}</style><pre>",
     );
     for y in 0..height {
+        let mut skip = 0;
         for x in 0..width {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
             let cell = &buf[(x, y)];
+            // Wide glyphs (emoji) take two cells in a terminal; hold them to that here too
+            let wide = unicode_width::UnicodeWidthStr::width(cell.symbol()) == 2;
+            if wide {
+                skip = 1;
+            }
             let bold = cell.modifier.contains(ratatui::style::Modifier::BOLD);
             let sym = cell
                 .symbol()
@@ -144,10 +158,15 @@ fn main() {
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
             html.push_str(&format!(
-                "<span style=\"color:{};background:{}{}\">{}</span>",
+                "<span style=\"color:{};background:{}{}{}\">{}</span>",
                 css(cell.fg, "#f2ddd8"),
                 css(cell.bg, "#0b0304"),
                 if bold { ";font-weight:700" } else { "" },
+                if wide {
+                    ";display:inline-block;width:2ch;text-align:center"
+                } else {
+                    ""
+                },
                 sym
             ));
         }

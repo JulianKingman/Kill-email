@@ -18,18 +18,11 @@ pub enum Mode {
     Setup,
     Scanning,
     Board,
-    Confirm(Plan),
+    Confirm,
     ConfirmUndo(Batch),
     Working,
     Help,
     Settings,
-}
-
-/// What the confirm screen is about to do
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Plan {
-    pub trash: bool,
-    pub unsubscribe: bool,
 }
 
 /// Work the event loop does on the app's behalf
@@ -67,7 +60,10 @@ pub struct App {
     pub folder: String,
     pub groups: Vec<SenderGroup>,
     pub table: TableState,
+    /// Senders marked ✖: their mail goes to Trash
     pub marked: HashSet<String>,
+    /// Senders marked 🚷: unsubscribe from them
+    pub leaving: HashSet<String>,
     pub sort: SortBy,
     pub progress: Progress,
     pub messages: usize,
@@ -136,6 +132,7 @@ impl App {
             groups: Vec::new(),
             table: TableState::default(),
             marked: HashSet::new(),
+            leaving: HashSet::new(),
             sort: SortBy::Volume,
             progress: Progress {
                 stage: "Connecting",
@@ -163,11 +160,16 @@ impl App {
         self.table.selected().and_then(|i| self.groups.get(i))
     }
 
-    /// Senders the next Terminate acts on: the marked ones, or the highlighted one
+    /// Nothing marked yet: Enter acts on the highlighted sender
+    fn nothing_marked(&self) -> bool {
+        self.marked.is_empty() && self.leaving.is_empty()
+    }
+
+    /// Senders whose mail goes to Trash: the marked ones, or the highlighted one
     pub fn chosen(&self) -> Vec<&SenderGroup> {
-        if self.marked.is_empty() {
+        if self.nothing_marked() {
             self.selected()
-                .filter(|g| g.protected.is_none() && !g.targets.is_empty())
+                .filter(|g| can_trash(g))
                 .into_iter()
                 .collect()
         } else {
@@ -178,28 +180,22 @@ impl App {
         }
     }
 
-    /// Senders a plan acts on. Unsubscribing alone works on protected senders too:
-    /// you may want to keep someone's old mail but stop their newsletter.
-    pub fn targets_for(&self, plan: Plan) -> Vec<&SenderGroup> {
-        if plan.trash {
-            return self.chosen();
-        }
-        if self.marked.is_empty() {
-            self.selected().into_iter().collect()
+    /// Senders to unsubscribe from: the marked ones, or the highlighted one when
+    /// unsubscribing comes with deleting
+    pub fn leavers(&self) -> Vec<&SenderGroup> {
+        if self.nothing_marked() {
+            self.selected()
+                .filter(|g| {
+                    can_leave(g) && can_trash(g) && self.config.prefs.unsubscribe_with_delete
+                })
+                .into_iter()
+                .collect()
         } else {
             self.groups
                 .iter()
-                .filter(|g| self.marked.contains(&g.address))
+                .filter(|g| self.leaving.contains(&g.address) && can_leave(g))
                 .collect()
         }
-    }
-
-    /// Of those, the ones that can still be unsubscribed from
-    pub fn leavers(&self, plan: Plan) -> Vec<&SenderGroup> {
-        self.targets_for(plan)
-            .into_iter()
-            .filter(|g| g.unsubscribed.is_none() && !g.unsubscribe.is_empty())
-            .collect()
     }
 
     pub fn chosen_totals(&self) -> (usize, usize, u64) {
@@ -387,6 +383,7 @@ impl App {
         }
         self.say(text, tone);
         self.marked.clear();
+        self.leaving.clear();
         self.mode = Mode::Board;
     }
 
@@ -397,6 +394,7 @@ impl App {
         self.groups = scan.groups;
         self.sort.apply(&mut self.groups);
         self.marked.clear();
+        self.leaving.clear();
         self.table.select(if self.groups.is_empty() {
             None
         } else {
@@ -436,13 +434,14 @@ impl App {
                 self.mode = Mode::Board;
                 Vec::new()
             }
-            Mode::Confirm(plan) => match key.code {
+            Mode::Confirm => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    let groups: Vec<SenderGroup> =
-                        self.targets_for(plan).into_iter().cloned().collect();
+                    let trash: Vec<SenderGroup> = self.chosen().into_iter().cloned().collect();
+                    let unsubscribe: Vec<SenderGroup> =
+                        self.leavers().into_iter().cloned().collect();
                     self.mode = Mode::Working;
                     self.progress = Progress {
-                        stage: if plan.trash {
+                        stage: if unsubscribe.is_empty() {
                             "Terminating"
                         } else {
                             "Unsubscribing"
@@ -450,18 +449,7 @@ impl App {
                         done: 0,
                         total: 0,
                     };
-                    vec![Effect::Job(Job::Kill(Kill {
-                        groups,
-                        trash: plan.trash,
-                        unsubscribe: plan.unsubscribe,
-                    }))]
-                }
-                KeyCode::Char('t') if plan.trash && !self.leavers(plan).is_empty() => {
-                    self.mode = Mode::Confirm(Plan {
-                        unsubscribe: !plan.unsubscribe,
-                        ..plan
-                    });
-                    Vec::new()
+                    vec![Effect::Job(Job::Kill(Kill { trash, unsubscribe }))]
                 }
                 _ => {
                     self.mode = Mode::Board;
@@ -519,7 +507,7 @@ impl App {
     fn on_settings_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         match self.settings.on_key(key, &mut self.config) {
             SettingsAction::None => Vec::new(),
-            SettingsAction::Close { changed } => {
+            SettingsAction::Close { changed, rescan } => {
                 self.mode = Mode::Board;
                 if !changed {
                     return Vec::new();
@@ -529,7 +517,9 @@ impl App {
                 if !self.demo {
                     effects.push(Effect::SaveSettings(self.config.clone()));
                 }
-                effects.push(self.scan("Rescanning with the new settings"));
+                if rescan {
+                    effects.push(self.scan("Rescanning with the new settings"));
+                }
                 effects
             }
             SettingsAction::ChangeAccount => {
@@ -576,35 +566,13 @@ impl App {
                 self.table.select(idx.or(Some(0)));
                 self.say(format!("Sorted by {}", self.sort.label()), Tone::Info);
             }
+            KeyCode::Char('n') => self.toggle_leaving(),
             KeyCode::Enter | KeyCode::Char('d') | KeyCode::Char('x') => {
                 let (_, messages, _) = self.chosen_totals();
-                if messages == 0 {
+                if messages == 0 && self.leavers().is_empty() {
                     self.say(self.nothing_to_do_reason(), Tone::Warn);
                 } else {
-                    let mut plan = Plan {
-                        trash: true,
-                        unsubscribe: true,
-                    };
-                    plan.unsubscribe = !self.leavers(plan).is_empty();
-                    self.mode = Mode::Confirm(plan);
-                }
-            }
-            KeyCode::Char('n') => {
-                let plan = Plan {
-                    trash: false,
-                    unsubscribe: true,
-                };
-                if self.leavers(plan).is_empty() {
-                    let why = match self.selected() {
-                        Some(g) if g.unsubscribed.is_some() && self.marked.is_empty() => {
-                            "Already unsubscribed from this sender"
-                        }
-                        _ if self.marked.is_empty() => "This sender offers no way to unsubscribe",
-                        _ => "None of the marked senders offer a way to unsubscribe",
-                    };
-                    self.say(why, Tone::Warn);
-                } else {
-                    self.mode = Mode::Confirm(plan);
+                    self.mode = Mode::Confirm;
                 }
             }
             KeyCode::Char('u') => match self.last_batch.clone() {
@@ -622,12 +590,16 @@ impl App {
         Vec::new()
     }
 
+    /// Space: mark or unmark ✖ (and 🚷 along with it, if that setting is on)
     fn toggle_mark(&mut self) {
         let Some(g) = self.selected() else { return };
         let address = g.address.clone();
         if let Some(hold) = g.protected {
             self.say(
-                format!("{address} is protected: {}", hold.label()),
+                format!(
+                    "{address} is protected: {}. Press n to just unsubscribe",
+                    hold.label()
+                ),
                 Tone::Warn,
             );
             return;
@@ -639,9 +611,41 @@ impl App {
             );
             return;
         }
-        if !self.marked.remove(&address) {
+        let leave = can_leave(g) && self.config.prefs.unsubscribe_with_delete;
+        if self.marked.remove(&address) {
+            self.leaving.remove(&address);
+        } else {
+            if leave {
+                self.leaving.insert(address.clone());
+            }
             self.marked.insert(address);
         }
+        self.advance();
+    }
+
+    /// n: mark or unmark 🚷 on its own. Works on protected senders too:
+    /// you may want to keep someone's old mail but stop their newsletter.
+    fn toggle_leaving(&mut self) {
+        let Some(g) = self.selected() else { return };
+        let address = g.address.clone();
+        if g.unsubscribed.is_some() {
+            self.say(format!("Already unsubscribed from {address}"), Tone::Info);
+            return;
+        }
+        if g.unsubscribe.is_empty() {
+            self.say(
+                format!("{address} offers no way to unsubscribe"),
+                Tone::Warn,
+            );
+            return;
+        }
+        if !self.leaving.remove(&address) {
+            self.leaving.insert(address);
+        }
+        self.advance();
+    }
+
+    fn advance(&mut self) {
         let len = self.groups.len();
         if let Some(i) = self.table.selected() {
             self.table.select(Some((i + 1).min(len.saturating_sub(1))));
@@ -658,9 +662,22 @@ impl App {
             Some(g) if g.targets.is_empty() => {
                 format!("Everything from {} is protected", g.address)
             }
-            _ => "Mark senders with space first".into(),
+            Some(g) if g.unsubscribe.is_empty() || g.unsubscribed.is_some() => {
+                "Mark senders with space first".into()
+            }
+            _ => "Mark senders with space, or n to just unsubscribe".into(),
         }
     }
+}
+
+/// Has mail that isn't protected
+fn can_trash(g: &SenderGroup) -> bool {
+    g.protected.is_none() && !g.targets.is_empty()
+}
+
+/// Offers a way out that hasn't been used yet
+pub fn can_leave(g: &SenderGroup) -> bool {
+    g.unsubscribed.is_none() && !g.unsubscribe.is_empty()
 }
 
 /// Server errors are terse; say what to do about the common ones
@@ -718,52 +735,85 @@ mod tests {
         app.on_key(KeyEvent::from(code))
     }
 
-    #[test]
-    fn marking_and_confirming_sends_the_marked_senders() {
-        let mut app = loaded();
-        press(&mut app, KeyCode::Char(' '));
-        press(&mut app, KeyCode::Char(' '));
-        assert_eq!(app.marked.len(), 2);
-        assert!(press(&mut app, KeyCode::Char('d')).is_empty());
-        assert!(matches!(
-            app.mode,
-            Mode::Confirm(Plan {
-                trash: true,
-                unsubscribe: true
-            })
-        ));
-        press(&mut app, KeyCode::Char('t'));
-        assert!(matches!(
-            app.mode,
-            Mode::Confirm(Plan {
-                unsubscribe: false,
-                ..
-            })
-        ));
-        match press(&mut app, KeyCode::Char('y')).pop() {
-            Some(Effect::Job(Job::Kill(k))) => {
-                assert_eq!(k.groups.len(), 2);
-                assert!(k.trash && !k.unsubscribe);
-            }
+    fn kill_job(app: &mut App) -> Kill {
+        press(app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Confirm));
+        match press(app, KeyCode::Char('y')).pop() {
+            Some(Effect::Job(Job::Kill(k))) => k,
             _ => panic!("expected a kill job"),
         }
+    }
+
+    fn addresses(groups: &[SenderGroup]) -> Vec<&str> {
+        groups.iter().map(|g| g.address.as_str()).collect()
+    }
+
+    #[test]
+    fn space_marks_both_and_advances() {
+        let mut app = loaded();
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.table.selected(), Some(1), "moves to the next sender");
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.marked.len(), 2);
+        assert_eq!(app.leaving.len(), 2, "both offer a way to unsubscribe");
+        let k = kill_job(&mut app);
+        assert_eq!(k.trash.len(), 2);
+        assert_eq!(k.unsubscribe.len(), 2);
+    }
+
+    #[test]
+    fn one_pass_mixes_kill_only_unsubscribe_only_and_both() {
+        let mut app = loaded();
+        let names: Vec<String> = app.groups.iter().map(|g| g.address.clone()).collect();
+        // Row 0: both. Row 1: kill only (space, then back up and n). Row 2: unsubscribe only.
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.table.selected(), Some(2), "n advances too");
+        press(&mut app, KeyCode::Char('n'));
+        let k = kill_job(&mut app);
+        assert_eq!(addresses(&k.trash), [&names[0], &names[1]]);
+        let mut leave = addresses(&k.unsubscribe);
+        leave.sort();
+        let mut want = vec![names[0].as_str(), names[2].as_str()];
+        want.sort();
+        assert_eq!(leave, want);
+    }
+
+    #[test]
+    fn unmarking_clears_both_marks() {
+        let mut app = loaded();
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(app.marked.is_empty() && app.leaving.is_empty());
+    }
+
+    #[test]
+    fn space_can_leave_unsubscribing_to_n() {
+        let mut app = loaded();
+        app.config.prefs.unsubscribe_with_delete = false;
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.marked.len(), 1);
+        assert!(app.leaving.is_empty());
     }
 
     fn killed(app: &mut App, k: &Kill) {
         app.on_update(Update::Killed(Killed {
             terminated: Some(crate::ops::Terminated {
                 batch: "b1".into(),
-                messages: k.groups.iter().map(|g| g.targets.len()).sum(),
-                senders: k.groups.len(),
+                messages: k.trash.iter().map(|g| g.targets.len()).sum(),
+                senders: k.trash.len(),
                 trashed: k
-                    .groups
+                    .trash
                     .iter()
                     .map(|g| (g.address.clone(), g.targets.len()))
                     .collect(),
                 dry_run: false,
             }),
             unsubscribed: k
-                .groups
+                .unsubscribe
                 .iter()
                 .map(|g| crate::tui::worker::Unsubscribed {
                     sender: g.address.clone(),
@@ -777,11 +827,12 @@ mod tests {
     fn terminated_senders_show_what_went_and_what_stayed() {
         let mut app = loaded();
         let before = app.groups[0].clone();
-        press(&mut app, KeyCode::Enter);
-        let Some(Effect::Job(Job::Kill(k))) = press(&mut app, KeyCode::Char('y')).pop() else {
-            panic!("expected a kill job");
-        };
-        assert!(k.unsubscribe, "unsubscribing is on by default");
+        let k = kill_job(&mut app);
+        assert_eq!(
+            k.unsubscribe.len(),
+            1,
+            "the highlighted sender, unsubscribed too"
+        );
         killed(&mut app, &k);
         let g = &app.groups[0];
         assert_eq!(g.trashed, before.targets.len());
@@ -798,37 +849,31 @@ mod tests {
             text.contains("Terminated") && text.contains("unsubscribed from 1"),
             "{text}"
         );
+        assert!(app.marked.is_empty() && app.leaving.is_empty());
     }
 
     #[test]
-    fn unsubscribing_alone_leaves_mail_and_works_on_protected_senders() {
+    fn protected_senders_can_only_be_unsubscribed_from() {
         let mut app = loaded();
-        let social = app
-            .groups
-            .iter()
-            .position(|g| g.address == "notify@socialnet.example")
-            .unwrap();
-        app.groups[social].protected = Some(crate::safety::Hold::Trusted);
-        app.table.select(Some(social));
+        app.groups[0].protected = Some(crate::safety::Hold::Trusted);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(app.marked.is_empty(), "space refuses");
+        assert_eq!(app.table.selected(), Some(0), "and stays put");
         press(&mut app, KeyCode::Char('n'));
-        assert!(matches!(
-            app.mode,
-            Mode::Confirm(Plan {
-                trash: false,
-                unsubscribe: true
-            })
-        ));
-        match press(&mut app, KeyCode::Char('y')).pop() {
-            Some(Effect::Job(Job::Kill(k))) => {
-                assert!(!k.trash);
-                assert_eq!(k.groups[0].address, "notify@socialnet.example");
-            }
-            _ => panic!("expected a kill job"),
-        }
-        app.groups[social].unsubscribed = Some(Utc::now());
-        app.mode = Mode::Board;
+        let k = kill_job(&mut app);
+        assert!(k.trash.is_empty());
+        assert_eq!(k.unsubscribe[0].address, app.groups[0].address);
+    }
+
+    #[test]
+    fn already_unsubscribed_senders_cannot_be_marked_again() {
+        let mut app = loaded();
+        app.groups[0].unsubscribed = Some(Utc::now());
         press(&mut app, KeyCode::Char('n'));
-        assert!(matches!(app.mode, Mode::Board), "already unsubscribed");
+        assert!(app.leaving.is_empty());
+        press(&mut app, KeyCode::Char(' '));
+        assert!(app.leaving.is_empty(), "space only marks ✖ here");
+        assert_eq!(app.marked.len(), 1);
     }
 
     #[test]
@@ -850,7 +895,7 @@ mod tests {
     fn cancelling_moves_nothing() {
         let mut app = loaded();
         press(&mut app, KeyCode::Char('d'));
-        assert!(matches!(app.mode, Mode::Confirm(_)));
+        assert!(matches!(app.mode, Mode::Confirm));
         assert!(press(&mut app, KeyCode::Char('n')).is_empty());
         assert!(matches!(app.mode, Mode::Board));
     }

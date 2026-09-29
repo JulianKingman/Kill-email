@@ -32,27 +32,26 @@ Or build it yourself with Rust installed: `cargo build --release`, and the binar
 
 The first run asks where your mail is (Gmail, iCloud, Yahoo, Fastmail or any IMAP server), your address and an app password, then connects. The password is kept in the system keychain (macOS Keychain, Windows Credential Manager, or the Secret Service on Linux), never in a file. Press `,` any time to change settings: your account, how recent mail must be to stay untouched, how much of the inbox to scan, and senders never to touch.
 
-Keys: `space` mark a sender, `enter` terminate (asks first), `n` unsubscribe only, `u` undo the last batch, `s` sort, `r` rescan, `,` settings, `?` help, `q` quit.
+Go down the list once, marking each sender:
+
+- `space` marks it ✖ **kill**: its mail goes to Trash. It also marks it 🚷 **unsubscribe** if the sender offers a way out.
+- `n` switches 🚷 on or off: press it after `space` for kill only, or on its own to unsubscribe only. That works on protected senders too.
+- Both move to the next sender. A dim dot shows where a mark could go.
+- `enter` shows everything marked on one confirm screen; `y` does it all. With nothing marked, it acts on the highlighted sender.
+
+Other keys: `u` undo the last batch, `s` sort, `r` rescan, `,` settings, `?` help, `q` quit. If you'd rather `space` didn't unsubscribe too, turn off "Space also unsubscribes" in settings.
 
 The right-hand pane shows the highlighted sender's newest messages (unread ones marked with a dot) so you can see what you're about to delete.
 
 ## Unsubscribing
 
-Terminating a sender also unsubscribes you from it, if it offers a way (press `t` on the confirm screen to turn that off). Press `n` to unsubscribe without deleting anything; that works on protected senders too. It uses the sender's own List-Unsubscribe header, best method first:
+It uses the sender's own List-Unsubscribe header, best method first:
 
 1. **One click** (RFC 8058): a single HTTPS request, no page to visit.
 2. **Email**: an unsubscribe email sent from your account, through your provider's outgoing server with the same app password.
 3. **Web page**: opened in your browser for you to finish.
 
 Unsubscribing can't be undone. Senders you've left show `✔ done`, and that's remembered between runs.
-
-Other commands:
-
-```bash
-kill-email scan --top 25     # print the loudest senders without the interface
-kill-email undo --list       # list past batches
-kill-email undo [BATCH]      # put a batch back (default: the most recent)
-```
 
 ## What it never deletes
 

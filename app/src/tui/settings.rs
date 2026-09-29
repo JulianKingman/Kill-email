@@ -20,22 +20,25 @@ enum Item {
     Recent,
     ScanLimit,
     Trusted,
+    AutoLeave,
     Password,
 }
 
-const ITEMS: [Item; 5] = [
+const ITEMS: [Item; 6] = [
     Item::Account,
     Item::Recent,
     Item::ScanLimit,
     Item::Trusted,
+    Item::AutoLeave,
     Item::Password,
 ];
 
 pub enum SettingsAction {
     None,
-    /// Leave settings; `changed` means the scan should be redone with the new rules
+    /// Leave settings. `changed`: save them; `rescan`: the safety rules changed too
     Close {
         changed: bool,
+        rescan: bool,
     },
     ChangeAccount,
     ForgetPassword,
@@ -48,7 +51,10 @@ pub struct Settings {
     trusted: Option<usize>,
     /// A new trusted entry being typed
     adding: Option<Input>,
+    /// Safety rules changed, so the scan is out of date
     changed: bool,
+    /// Something that doesn't affect the scan changed
+    prefs_changed: bool,
     pub note: Option<String>,
 }
 
@@ -105,8 +111,10 @@ impl Settings {
         let item = ITEMS[self.selected];
         match key.code {
             KeyCode::Esc | KeyCode::Char(',') | KeyCode::Char('q') => {
+                let rescan = std::mem::take(&mut self.changed);
                 return SettingsAction::Close {
-                    changed: std::mem::take(&mut self.changed),
+                    changed: rescan || std::mem::take(&mut self.prefs_changed),
+                    rescan,
                 };
             }
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
@@ -126,6 +134,11 @@ impl Settings {
                             step(&SCAN_LIMITS, config.safety.scan_limit, forward);
                         self.changed = true;
                     }
+                    Item::AutoLeave => {
+                        config.prefs.unsubscribe_with_delete =
+                            !config.prefs.unsubscribe_with_delete;
+                        self.prefs_changed = true;
+                    }
                     _ => {}
                 }
             }
@@ -138,6 +151,10 @@ impl Settings {
                     }
                 }
                 Item::Password => return SettingsAction::ForgetPassword,
+                Item::AutoLeave => {
+                    config.prefs.unsubscribe_with_delete = !config.prefs.unsubscribe_with_delete;
+                    self.prefs_changed = true;
+                }
                 _ => {}
             },
             _ => {}
@@ -198,6 +215,15 @@ impl Settings {
                         n => format!("{n} senders or domains"),
                     }),
                     hint("enter to edit"),
+                ]),
+                Item::AutoLeave => Line::from(vec![
+                    label("Space also unsubscribes", on),
+                    value(if config.prefs.unsubscribe_with_delete {
+                        "◀ yes ▶".into()
+                    } else {
+                        "◀ no ▶".into()
+                    }),
+                    hint("✖ marks 🚷 too"),
                 ]),
                 Item::Password => Line::from(vec![
                     label("Password", on),
@@ -328,7 +354,10 @@ mod tests {
         assert_eq!(c.safety.recent_days, 30);
         assert!(matches!(
             press(&mut s, &mut c, KeyCode::Esc),
-            SettingsAction::Close { changed: true }
+            SettingsAction::Close {
+                changed: true,
+                rescan: true
+            }
         ));
     }
 
@@ -350,7 +379,28 @@ mod tests {
         press(&mut s, &mut c, KeyCode::Esc);
         assert!(matches!(
             press(&mut s, &mut c, KeyCode::Esc),
-            SettingsAction::Close { changed: true }
+            SettingsAction::Close {
+                changed: true,
+                rescan: true
+            }
+        ));
+    }
+
+    #[test]
+    fn preferences_save_without_a_rescan() {
+        let mut s = Settings::open();
+        let mut c = config();
+        for _ in 0..4 {
+            press(&mut s, &mut c, KeyCode::Down);
+        }
+        press(&mut s, &mut c, KeyCode::Right);
+        assert!(!c.prefs.unsubscribe_with_delete);
+        assert!(matches!(
+            press(&mut s, &mut c, KeyCode::Esc),
+            SettingsAction::Close {
+                changed: true,
+                rescan: false
+            }
         ));
     }
 
@@ -360,7 +410,7 @@ mod tests {
         let mut c = config();
         assert!(matches!(
             press(&mut s, &mut c, KeyCode::Esc),
-            SettingsAction::Close { changed: false }
+            SettingsAction::Close { changed: false, .. }
         ));
     }
 }

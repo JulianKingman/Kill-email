@@ -11,6 +11,23 @@ pub struct Config {
     pub account: Account,
     #[serde(default)]
     pub safety: Safety,
+    #[serde(default)]
+    pub prefs: Prefs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Prefs {
+    /// Marking a sender for deletion also marks it for unsubscribing
+    pub unsubscribe_with_delete: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            unsubscribe_with_delete: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +175,7 @@ impl Config {
                 smtp: None,
             },
             safety: Safety::default(),
+            prefs: Prefs::default(),
         }
     }
 

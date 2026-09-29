@@ -23,13 +23,12 @@ pub enum Job {
     Undo(String),
 }
 
-/// What to do to a set of senders
+/// What to do to the marked senders
 pub struct Kill {
-    pub groups: Vec<SenderGroup>,
     /// Move their mail to Trash
-    pub trash: bool,
-    /// Unsubscribe from the ones that offer a way out
-    pub unsubscribe: bool,
+    pub trash: Vec<SenderGroup>,
+    /// Unsubscribe from these
+    pub unsubscribe: Vec<SenderGroup>,
 }
 
 pub struct Killed {
@@ -184,9 +183,9 @@ fn run_kill(
     tx: &Sender<Update>,
 ) -> Result<Killed> {
     let mut unsubscribed = Vec::new();
-    if kill.unsubscribe {
+    {
         let leaving: Vec<&SenderGroup> = kill
-            .groups
+            .unsubscribe
             .iter()
             .filter(|g| g.unsubscribed.is_none() && !g.unsubscribe.is_empty())
             .collect();
@@ -215,9 +214,9 @@ fn run_kill(
         }
     }
 
-    let terminated = if kill.trash {
+    let terminated = if !kill.trash.is_empty() {
         let groups: Vec<SenderGroup> = kill
-            .groups
+            .trash
             .into_iter()
             .filter(|g| g.protected.is_none() && !g.targets.is_empty())
             .collect();
