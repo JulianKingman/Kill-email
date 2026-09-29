@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use mail_parser::MessageParser;
 
+use super::kind::{NOTIFICATION_HEADERS, Signals, classify};
 use super::{MessageMeta, Unsubscribe};
 
 pub struct Flags {
@@ -41,6 +42,30 @@ pub fn parse_meta(uid: u32, raw_headers: &[u8], flags: Flags, size: u32) -> Mess
     let bulk = !unsubscribe.is_empty()
         || header("List-Id").is_some()
         || matches!(precedence.as_str(), "bulk" | "list" | "junk");
+    let subject = msg
+        .and_then(|m| m.subject())
+        .unwrap_or("(no subject)")
+        .to_string();
+
+    let present: Vec<&str> = NOTIFICATION_HEADERS
+        .iter()
+        .copied()
+        .filter(|h| header(h).is_some())
+        .collect();
+    let list_unsubscribe = header("List-Unsubscribe");
+    let auto_submitted = header("Auto-Submitted");
+    let feedback_id = header("Feedback-ID");
+    let x_mailer = header("X-Mailer");
+    let (kind, platform) = classify(&Signals {
+        from: &from,
+        subject: &subject,
+        bulk,
+        list_unsubscribe: list_unsubscribe.as_deref(),
+        auto_submitted: auto_submitted.as_deref(),
+        feedback_id: feedback_id.as_deref(),
+        x_mailer: x_mailer.as_deref(),
+        present: &present,
+    });
 
     MessageMeta {
         uid,
@@ -50,10 +75,7 @@ pub fn parse_meta(uid: u32, raw_headers: &[u8], flags: Flags, size: u32) -> Mess
             .filter(|id| !id.is_empty()),
         from,
         from_name,
-        subject: msg
-            .and_then(|m| m.subject())
-            .unwrap_or("(no subject)")
-            .to_string(),
+        subject,
         date: msg
             .and_then(|m| m.date())
             .and_then(|d| DateTime::<Utc>::from_timestamp(d.to_timestamp(), 0)),
@@ -63,6 +85,8 @@ pub fn parse_meta(uid: u32, raw_headers: &[u8], flags: Flags, size: u32) -> Mess
         size,
         unsubscribe,
         bulk,
+        kind,
+        platform,
     }
 }
 
@@ -152,6 +176,17 @@ List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
             Some("https://shopmart.example/u/1")
         );
         assert_eq!(meta.unsubscribe.label(), "1-click");
+        assert_eq!(meta.kind, super::super::Kind::Marketing);
+    }
+
+    #[test]
+    fn notification_headers_are_read() {
+        let raw = b"From: GitHub <notifications@github.com>\r\n\
+Subject: Re: [acme/api] Fix login\r\n\
+X-GitHub-Reason: review_requested\r\n\
+List-Unsubscribe: <https://github.com/notifications/unsubscribe/x>\r\n\r\n";
+        let meta = parse_meta(1, raw, flags(), 10);
+        assert_eq!(meta.kind, super::super::Kind::Notification);
     }
 
     #[test]
@@ -159,6 +194,7 @@ List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
         let raw = b"From: Mom <mom@family.example>\r\nSubject: dinner?\r\nMessage-ID: <m1@family.example>\r\n\r\n";
         let meta = parse_meta(1, raw, flags(), 10);
         assert!(!meta.bulk);
+        assert_eq!(meta.kind, super::super::Kind::Personal);
         assert!(meta.unsubscribe.is_empty());
     }
 

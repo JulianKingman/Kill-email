@@ -3,6 +3,7 @@
 mod fake;
 mod headers;
 mod imap;
+pub mod kind;
 
 use std::collections::HashSet;
 
@@ -12,10 +13,12 @@ use chrono::{DateTime, Utc};
 pub use fake::FakeStore;
 pub use headers::{parse_meta, parse_recipients};
 pub use imap::ImapStore;
+pub use kind::Kind;
 
 /// Headers fetched for every scanned message. Bodies are never downloaded.
-pub const SCAN_HEADERS: &str =
-    "FROM DATE SUBJECT MESSAGE-ID LIST-UNSUBSCRIBE LIST-UNSUBSCRIBE-POST LIST-ID PRECEDENCE";
+pub const SCAN_HEADERS: &str = "FROM DATE SUBJECT MESSAGE-ID LIST-UNSUBSCRIBE LIST-UNSUBSCRIBE-POST \
+     LIST-ID PRECEDENCE AUTO-SUBMITTED FEEDBACK-ID X-MAILER X-GITHUB-REASON X-GITLAB-PROJECT \
+     X-JIRA-FINGERPRINT";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageMeta {
@@ -33,6 +36,9 @@ pub struct MessageMeta {
     pub unsubscribe: Unsubscribe,
     /// Sent through a mailing list or bulk sender
     pub bulk: bool,
+    pub kind: Kind,
+    /// The bulk-mail service that sent it, if recognised
+    pub platform: Option<&'static str>,
 }
 
 /// How a sender says you can unsubscribe (RFC 2369 and RFC 8058)

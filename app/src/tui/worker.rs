@@ -12,6 +12,7 @@ use crate::mail::{Folders, MailStore};
 use crate::ops::{self, Restored, Terminated};
 use crate::safety::SafetyRules;
 use crate::senders::{SenderGroup, group_by_sender};
+use crate::suggest::annotate;
 use crate::unsubscribe::{Channels, Method, Pretend, unsubscribe};
 
 pub type StoreFactory = Box<dyn FnOnce() -> Result<Box<dyn MailStore>> + Send>;
@@ -55,6 +56,9 @@ pub enum Update {
     /// Could not log in; the thread has stopped
     ConnectFailed(String),
 }
+
+/// How much of Trash to read for mail deleted unread
+const TRASH_SCAN_LIMIT: usize = 2_000;
 
 pub struct Scan {
     pub folders: Folders,
@@ -160,10 +164,20 @@ fn scan(
     let count = correspondents.len();
     let rules = SafetyRules::new(safety, correspondents, Utc::now());
     let mut groups = group_by_sender(&messages, &rules);
-    let unsubscribed = journal.unsubscribed().unwrap_or_default();
-    for g in &mut groups {
-        g.unsubscribed = unsubscribed.get(&g.address).copied();
-    }
+    // Mail you binned without opening says more than anything
+    let _ = tx.send(Update::Progress {
+        stage: "Checking Trash",
+        done: 0,
+        total: 0,
+    });
+    let trash = store.scan(&folders.trash, TRASH_SCAN_LIMIT, &mut |_, _| {})?;
+    annotate(
+        &mut groups,
+        &trash,
+        &journal.unsubscribed().unwrap_or_default(),
+        &journal.dismissed().unwrap_or_default(),
+        Utc::now(),
+    );
     Ok(Scan {
         folders,
         groups,

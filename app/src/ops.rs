@@ -149,6 +149,7 @@ mod tests {
     fn terminate_then_undo_round_trips() {
         let (mut store, folders, groups, journal, _dir) = setup();
         let inbox_before = store.count("INBOX");
+        let trash_before = store.count("Trash");
         let shop: Vec<SenderGroup> = groups
             .into_iter()
             .filter(|g| g.address == "deals@shopmart.example")
@@ -159,7 +160,7 @@ mod tests {
         let out = terminate(&mut store, &folders, &shop, &journal, false, &mut |_, _| {}).unwrap();
         assert_eq!(out.messages, targets);
         assert_eq!(store.count("INBOX"), inbox_before - targets);
-        assert_eq!(store.count("Trash"), targets);
+        assert_eq!(store.count("Trash"), trash_before + targets);
 
         let batches = journal.batches().unwrap();
         assert_eq!(batches.len(), 1);
@@ -170,7 +171,7 @@ mod tests {
         assert_eq!(back.restored, targets);
         assert_eq!(back.missing, 0);
         assert_eq!(store.count("INBOX"), inbox_before);
-        assert_eq!(store.count("Trash"), 0);
+        assert_eq!(store.count("Trash"), trash_before);
         assert!(journal.batches().unwrap()[0].undone);
     }
 

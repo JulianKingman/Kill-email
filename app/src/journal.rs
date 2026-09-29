@@ -1,6 +1,6 @@
 //! Append-only record of every message moved, so any batch can be put back.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -22,6 +22,11 @@ pub enum Record {
         sender: String,
         at: DateTime<Utc>,
         method: String,
+    },
+    /// Stop suggesting anything for this sender
+    Dismissed {
+        sender: String,
+        at: DateTime<Utc>,
     },
 }
 
@@ -128,7 +133,7 @@ impl Journal {
                         b.undone = true;
                     }
                 }
-                Record::Unsubscribed { .. } => {}
+                Record::Unsubscribed { .. } | Record::Dismissed { .. } => {}
             }
         }
         let mut out: Vec<Batch> = map.into_values().collect();
@@ -145,6 +150,18 @@ impl Journal {
             }
         }
         Ok(out)
+    }
+
+    /// Senders you've told it to stop suggesting
+    pub fn dismissed(&self) -> Result<HashSet<String>> {
+        Ok(self
+            .records()?
+            .into_iter()
+            .filter_map(|r| match r {
+                Record::Dismissed { sender, .. } => Some(sender),
+                _ => None,
+            })
+            .collect())
     }
 
     pub fn moved_in(&self, batch: &str) -> Result<Vec<Moved>> {

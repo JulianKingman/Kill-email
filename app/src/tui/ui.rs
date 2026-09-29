@@ -11,6 +11,7 @@ use super::app::{App, Mode, Tone, can_leave};
 use super::march::{self, March};
 use super::theme::{self, ALIVE, AMBER, ASH, BONE, EMBER, LOGO, MARK, PHOSPHOR, VOID};
 use crate::senders::SenderGroup;
+use crate::suggest::Advice;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -222,19 +223,30 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
             let marked = app.marked.contains(&g.address);
             let leaving = app.leaving.contains(&g.address);
             let (verdict, color) = verdict(g);
-            // A dim dot where a mark could go, nothing where it can't
+            // A dim dot where a mark could go, a grey mark where one is suggested,
+            // nothing where it can't go
             let dot = Style::new().fg(EMBER);
+            let ghost = Style::new().fg(ASH);
+            let advice = g.suggestion.as_ref().map(|s| s.advice);
             let kill = if marked {
                 Span::styled(icons.kill, Style::new().fg(PHOSPHOR).bold())
             } else if g.protected.is_none() && !g.targets.is_empty() {
-                Span::styled("·", dot)
+                if advice.is_some() {
+                    Span::styled(icons.kill, ghost)
+                } else {
+                    Span::styled("·", dot)
+                }
             } else {
                 Span::raw(" ")
             };
             let leave = if leaving {
                 Span::styled(icons.leave, Style::new().fg(AMBER).bold())
             } else if can_leave(g) {
-                Span::styled("·", dot)
+                if advice == Some(Advice::Unsubscribe) {
+                    Span::styled(icons.leave, ghost)
+                } else {
+                    Span::styled("·", dot)
+                }
             } else {
                 Span::raw(" ")
             };
@@ -351,11 +363,38 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::from(vec![label("Unsubscribe"), Span::raw(g.unsubscribe.label())]),
         Line::from(vec![
-            label("Mailing list"),
-            Span::raw(if g.bulk { "yes" } else { "no" }),
+            label("Kind"),
+            Span::raw(match g.platform {
+                Some(p) => format!("{} via {p}", g.kind.label()),
+                None => g.kind.label().to_string(),
+            }),
+        ]),
+        Line::from(vec![
+            label("Last opened"),
+            Span::raw(match g.last_opened {
+                Some(d) => d.format("%b %-d, %Y").to_string(),
+                None if g.total > 0 => "never".into(),
+                None => "—".into(),
+            }),
         ]),
         Line::from(""),
     ];
+    if let Some(s) = &g.suggestion {
+        lines.push(Line::from(Span::styled(
+            format!("SUGGESTED: {}", s.advice.label().to_uppercase()),
+            Style::new().fg(AMBER).bold(),
+        )));
+        for r in &s.reasons {
+            lines.push(Line::from(Span::styled(format!("  · {r}"), theme::muted())));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("  a", theme::key()),
+            Span::styled(" accept all  ", theme::muted()),
+            Span::styled("i", theme::key()),
+            Span::styled(" never suggest this", theme::muted()),
+        ]));
+        lines.push(Line::from(""));
+    }
     if let Some(hold) = g.protected {
         lines.push(Line::from(Span::styled(
             format!("Protected: {}", hold.label()),
@@ -474,6 +513,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::styled("enter to execute", theme::key()));
             Line::from(spans)
         }
+        None if app.suggested() > 0 => Line::from(vec![
+            Span::styled(
+                format!(" {} suggestions, shown in grey   ", app.suggested()),
+                Style::new().fg(BONE),
+            ),
+            Span::styled("a", theme::key()),
+            Span::styled(" marks them all for you to check   ", theme::muted()),
+            Span::styled("s", theme::key()),
+            Span::styled(" sorts them first", theme::muted()),
+        ]),
         None if app.messages > 0 => Line::from(Span::styled(
             format!(
                 " {} senders · learned {} people you write to from Sent",
@@ -490,10 +539,10 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let leave_hint = format!("{} unsubscribe", icons.leave);
     let hints: &[(&str, &str)] = match app.mode {
         Mode::Board => &[
-            ("↑↓", "move"),
             ("space", &kill_hint),
             ("n", &leave_hint),
             ("enter", "execute"),
+            ("a", "accept suggestions"),
             ("u", "undo"),
             ("s", "sort"),
             ("r", "rescan"),
@@ -642,15 +691,20 @@ fn draw_help(f: &mut Frame, area: Rect, app: &App) {
         "{} unsubscribe only, or take the {} off a killed sender",
         icons.leave, icons.leave
     );
-    let rows: [(&str, &str); 8] = [
-        ("space", &kill),
-        ("n", &leave),
+    let rows: [(&str, &str); 10] = [
+        ("space", kill.as_str()),
+        ("n", leave.as_str()),
         (
             "enter",
             "execute everything marked (or the highlighted sender)",
         ),
+        ("a", "mark everything suggested (grey marks) to check"),
+        ("i", "never suggest anything for the highlighted sender"),
         ("u", "undo the last termination"),
-        ("s", "sort: most mail, least read, oldest"),
+        (
+            "s",
+            "sort: most mail, suggestions first, least read, oldest",
+        ),
         ("r", "rescan the inbox"),
         (",", "settings: account, what to protect, icons"),
         ("q", "quit"),

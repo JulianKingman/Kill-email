@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 
-use crate::mail::{MessageMeta, Unsubscribe};
+use crate::mail::{Kind, MessageMeta, Unsubscribe};
 use crate::safety::{Hold, SafetyRules};
+use crate::suggest::{Advice, Suggestion};
 
 #[derive(Debug, Clone)]
 pub struct SenderGroup {
@@ -31,6 +32,24 @@ pub struct SenderGroup {
     pub trashed: usize,
     /// Set once you've unsubscribed from this sender
     pub unsubscribed: Option<DateTime<Utc>>,
+    /// What sort of mail this is, by majority of its messages
+    pub kind: Kind,
+    /// Messages of each kind
+    pub kinds: BTreeMap<Kind, usize>,
+    /// The bulk-mail service it uses, if recognised
+    pub platform: Option<&'static str>,
+    /// Messages you replied to
+    pub replied: usize,
+    /// Messages you starred or flagged
+    pub starred: usize,
+    /// Date of the newest message you opened
+    pub last_opened: Option<DateTime<Utc>>,
+    /// Its messages in Trash that were never opened
+    pub binned_unread: usize,
+    /// What the app thinks you should do about this sender
+    pub suggestion: Option<Suggestion>,
+    /// You told it to stop suggesting anything for this sender
+    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,12 +113,28 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
             samples: Vec::new(),
             trashed: 0,
             unsubscribed: None,
+            kind: Kind::default(),
+            kinds: BTreeMap::new(),
+            platform: None,
+            replied: 0,
+            starred: 0,
+            last_opened: None,
+            binned_unread: 0,
+            suggestion: None,
+            dismissed: false,
         });
 
         g.total += 1;
         g.unread += usize::from(!m.seen);
         g.bytes += u64::from(m.size);
         g.bulk |= m.bulk;
+        *g.kinds.entry(m.kind).or_default() += 1;
+        g.platform = g.platform.or(m.platform);
+        g.replied += usize::from(m.answered);
+        g.starred += usize::from(m.flagged);
+        if m.seen {
+            g.last_opened = g.last_opened.max(m.date);
+        }
         if g.name.is_none() {
             g.name = m.from_name.clone();
         }
@@ -139,6 +174,7 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
     let mut out: Vec<SenderGroup> = groups.into_values().collect();
     for g in &mut out {
         trim_samples(&mut g.samples);
+        g.kind = dominant_kind(&g.kinds, g.total);
     }
     out.sort_by(|a, b| {
         b.total
@@ -146,6 +182,21 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
             .then_with(|| a.address.cmp(&b.address))
     });
     out
+}
+
+/// The kind most of a sender's mail is. A sender whose mail is even partly about
+/// things you did (receipts, reviews) counts as notifications, the safer reading.
+fn dominant_kind(kinds: &BTreeMap<Kind, usize>, total: usize) -> Kind {
+    let notifications = kinds.get(&Kind::Notification).copied().unwrap_or(0);
+    if notifications * 10 >= total * 3 && notifications > 0 {
+        return Kind::Notification;
+    }
+    // Ties go to the earlier, keep-ier kind
+    kinds
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+        .map(|(k, _)| *k)
+        .unwrap_or_default()
 }
 
 /// Keep only the newest samples, newest first
@@ -157,6 +208,7 @@ fn trim_samples(samples: &mut Vec<Sample>) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortBy {
     Volume,
+    Suggested,
     LeastRead,
     Oldest,
 }
@@ -164,7 +216,8 @@ pub enum SortBy {
 impl SortBy {
     pub fn next(self) -> Self {
         match self {
-            SortBy::Volume => SortBy::LeastRead,
+            SortBy::Volume => SortBy::Suggested,
+            SortBy::Suggested => SortBy::LeastRead,
             SortBy::LeastRead => SortBy::Oldest,
             SortBy::Oldest => SortBy::Volume,
         }
@@ -173,6 +226,7 @@ impl SortBy {
     pub fn label(self) -> &'static str {
         match self {
             SortBy::Volume => "most mail",
+            SortBy::Suggested => "suggestions first",
             SortBy::LeastRead => "least read",
             SortBy::Oldest => "oldest",
         }
@@ -181,6 +235,15 @@ impl SortBy {
     pub fn apply(self, groups: &mut [SenderGroup]) {
         match self {
             SortBy::Volume => groups.sort_by_key(|g| std::cmp::Reverse(g.total)),
+            SortBy::Suggested => groups.sort_by_key(|g| {
+                let rank = match g.suggestion.as_ref().map(|s| s.advice) {
+                    Some(Advice::Unsubscribe) => 0,
+                    Some(Advice::KillOnly) => 1,
+                    Some(Advice::ClearOut) => 2,
+                    None => 3,
+                };
+                (rank, std::cmp::Reverse(g.total))
+            }),
             SortBy::LeastRead => groups.sort_by(|a, b| {
                 a.read_pct()
                     .cmp(&b.read_pct())

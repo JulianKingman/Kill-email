@@ -110,6 +110,15 @@ fn apply(effect: Effect, app: &mut App, worker: &mut Option<Worker>, rt: &Runtim
                 Tone::Warn,
             ),
         },
+        Effect::Dismiss(sender) => {
+            let record = crate::journal::Record::Dismissed {
+                sender,
+                at: chrono::Utc::now(),
+            };
+            if let Err(e) = rt.journal.append(&[record]) {
+                app.say(format!("Couldn't remember that: {e:#}"), Tone::Warn);
+            }
+        }
         Effect::ForgetPassword(username) => {
             if let Err(e) = secrets::forget(&username) {
                 app.say(format!("Couldn't remove the saved password: {e}"), Tone::Warn);

@@ -139,6 +139,8 @@ mod tests {
             size: 100,
             unsubscribe: Unsubscribe::default(),
             bulk: true,
+            kind: crate::mail::Kind::Marketing,
+            platform: None,
         }
     }
 

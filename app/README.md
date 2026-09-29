@@ -39,9 +39,21 @@ Go down the list once, marking each sender:
 - Both move to the next sender. A dim dot shows where a mark could go.
 - `enter` shows everything marked on one confirm screen; `y` does it all. With nothing marked, it acts on the highlighted sender.
 
-Other keys: `u` undo the last batch, `s` sort, `r` rescan, `,` settings, `?` help, `q` quit.
+Other keys: `a` accept suggestions, `i` ignore a suggestion, `u` undo the last batch, `s` sort, `r` rescan, `,` settings, `?` help, `q` quit.
 
 In settings you can turn off "Unsubscribe on kill", and switch the icons to a trash can and a crossed-out person if your terminal uses a [Nerd Font](https://www.nerdfonts.com).
+
+## Suggestions
+
+The Kill List suggests what to do about each sender, shown as grey marks. Press `a` to mark everything suggested (you still check and confirm with `enter`), `i` to never suggest anything for a sender again, or `s` to sort suggestions first. The right-hand pane says why:
+
+- **Unsubscribe**: marketing, social nudges, newsletters and other bulk mail you ignore. That's opening 10% or less, nothing opened in 90 days, or binning several unread (it reads the newest 2,000 messages in Trash).
+- **Clear out, stay subscribed**: notifications about things you did (GitHub, receipts, bookings) that pile up unread. You'd want the next one, just not the old ones.
+- **Clear out**: ignored bulk mail with no way to unsubscribe.
+
+It never suggests anything for people you write to, senders on your "Never touch" list, anyone you've replied to, senders whose mail you often star, personal mail, or mail you open half the time or more. It needs at least 5 messages to judge by.
+
+What kind of mail a sender sends comes from headers only: known bulk-mail services (Mailchimp, Klaviyo, Substack and others), notification headers such as GitHub's, social networks, and wording in subjects. The on-device model will refine the unclear cases in a later milestone.
 
 The right-hand pane shows the highlighted sender's newest messages (unread ones marked with a dot) so you can see what you're about to delete.
 
@@ -66,7 +78,7 @@ Unsubscribing can't be undone. Senders you've left show `✔ done`, and that's r
 
 Everything else it moves goes to your Trash, never straight to deletion. The undo journal lives in your data folder (`journal.jsonl`), and undo finds each message again by its exact Message-ID.
 
-Only headers are read (From, Date, Subject, Message-ID and the mailing-list headers). Message bodies are never downloaded.
+Only headers are read (From, Date, Subject, Message-ID, the mailing-list headers, and a few that identify bulk-mail services and notifications). Message bodies are never downloaded.
 
 ## Develop
 

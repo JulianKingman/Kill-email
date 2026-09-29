@@ -13,6 +13,7 @@ use super::worker::{Job, Kill, Killed, Scan, Update};
 use crate::config::Config;
 use crate::journal::Batch;
 use crate::senders::{SenderGroup, SortBy};
+use crate::suggest::Advice;
 
 pub enum Mode {
     Setup,
@@ -39,6 +40,8 @@ pub enum Effect {
         password: String,
     },
     ForgetPassword(String),
+    /// Stop suggesting anything for this sender, for good
+    Dismiss(String),
 }
 
 pub struct Progress {
@@ -381,6 +384,12 @@ impl App {
         } else if moved {
             text.push_str(". Press u to undo the move");
         }
+        let now = chrono::Utc::now();
+        for g in &mut self.groups {
+            if g.suggestion.is_some() {
+                g.suggestion = crate::suggest::suggest(g, now);
+            }
+        }
         self.say(text, tone);
         self.marked.clear();
         self.leaving.clear();
@@ -567,6 +576,8 @@ impl App {
                 self.say(format!("Sorted by {}", self.sort.label()), Tone::Info);
             }
             KeyCode::Char('n') => self.toggle_leaving(),
+            KeyCode::Char('a') => self.accept_suggestions(),
+            KeyCode::Char('i') => return self.ignore_suggestion(),
             KeyCode::Enter | KeyCode::Char('d') | KeyCode::Char('x') => {
                 let (_, messages, _) = self.chosen_totals();
                 if messages == 0 && self.leavers().is_empty() {
@@ -645,6 +656,64 @@ impl App {
         self.advance();
     }
 
+    /// a: mark everything the app suggests, for review before enter
+    fn accept_suggestions(&mut self) {
+        let mut senders = 0;
+        for g in &self.groups {
+            let Some(s) = &g.suggestion else { continue };
+            senders += 1;
+            if can_trash(g) {
+                self.marked.insert(g.address.clone());
+            }
+            if s.advice == Advice::Unsubscribe && can_leave(g) {
+                self.leaving.insert(g.address.clone());
+            }
+        }
+        if senders == 0 {
+            self.say("No suggestions right now", Tone::Info);
+        } else {
+            self.say(
+                format!("Marked {senders} suggested senders. Check them, then press enter"),
+                Tone::Good,
+            );
+        }
+    }
+
+    /// i: stop suggesting anything for the highlighted sender, and remember that
+    fn ignore_suggestion(&mut self) -> Vec<Effect> {
+        let Some(i) = self.table.selected() else {
+            return Vec::new();
+        };
+        let Some(g) = self.groups.get_mut(i) else {
+            return Vec::new();
+        };
+        if g.suggestion.is_none() {
+            self.say("Nothing suggested for this sender", Tone::Info);
+            return Vec::new();
+        }
+        g.suggestion = None;
+        g.dismissed = true;
+        let address = g.address.clone();
+        self.say(
+            format!("Won't suggest anything for {address} again"),
+            Tone::Info,
+        );
+        self.advance();
+        if self.demo {
+            Vec::new()
+        } else {
+            vec![Effect::Dismiss(address)]
+        }
+    }
+
+    /// Senders with a suggestion
+    pub fn suggested(&self) -> usize {
+        self.groups
+            .iter()
+            .filter(|g| g.suggestion.is_some())
+            .count()
+    }
+
     fn advance(&mut self) {
         let len = self.groups.len();
         if let Some(i) = self.table.selected() {
@@ -721,10 +790,19 @@ mod tests {
         let folders = store.folders().unwrap();
         let msgs = store.scan("INBOX", 0, &mut |_, _| {}).unwrap();
         let rules = SafetyRules::new(&Safety::default(), store.sent_to.clone(), Utc::now());
+        let mut groups = group_by_sender(&msgs, &rules);
+        let trash = store.scan("Trash", 0, &mut |_, _| {}).unwrap();
+        crate::suggest::annotate(
+            &mut groups,
+            &trash,
+            &Default::default(),
+            &Default::default(),
+            Utc::now(),
+        );
         let mut app = App::connected(config(), true, false, false, None);
         app.on_update(Update::Scanned(Scan {
             folders,
-            groups: group_by_sender(&msgs, &rules),
+            groups,
             messages: msgs.len(),
             correspondents: 2,
         }));
@@ -850,6 +928,62 @@ mod tests {
             "{text}"
         );
         assert!(app.marked.is_empty() && app.leaving.is_empty());
+    }
+
+    #[test]
+    fn accepting_marks_what_is_suggested_and_nothing_else() {
+        let mut app = loaded();
+        assert!(app.suggested() >= 4);
+        press(&mut app, KeyCode::Char('a'));
+        let has = |set: &HashSet<String>, a: &str| set.contains(a);
+        // Unsubscribe suggestions get both marks
+        assert!(has(&app.marked, "notify@socialnet.example"));
+        assert!(has(&app.leaving, "notify@socialnet.example"));
+        // Receipts: cleared out, still subscribed
+        assert!(has(&app.marked, "no-reply@rideshare.example"));
+        assert!(!has(&app.leaving, "no-reply@rideshare.example"));
+        // GitHub and people: untouched
+        assert!(!has(&app.marked, "notifications@github.com"));
+        assert!(!has(&app.leaving, "notifications@github.com"));
+        assert!(!has(&app.marked, "mom@family.example"));
+        assert!(
+            matches!(app.mode, Mode::Board),
+            "you still confirm with enter"
+        );
+    }
+
+    #[test]
+    fn ignoring_a_suggestion_is_remembered() {
+        let mut app = loaded();
+        let social = app.groups[0].address.clone();
+        assert!(app.groups[0].suggestion.is_some());
+        let effects = press(&mut app, KeyCode::Char('i'));
+        assert!(matches!(effects.as_slice(), [Effect::Dismiss(a)] if *a == social));
+        assert!(app.groups[0].suggestion.is_none());
+        assert_eq!(app.table.selected(), Some(1), "moves on");
+        press(&mut app, KeyCode::Char('a'));
+        assert!(
+            !app.marked.contains(&social),
+            "ignored senders aren't accepted"
+        );
+    }
+
+    #[test]
+    fn suggestions_go_once_acted_on() {
+        let mut app = loaded();
+        press(&mut app, KeyCode::Char('a'));
+        let k = kill_job(&mut app);
+        killed(&mut app, &k);
+        assert_eq!(
+            app.suggested(),
+            0,
+            "{:?}",
+            app.groups
+                .iter()
+                .filter(|g| g.suggestion.is_some())
+                .map(|g| &g.address)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

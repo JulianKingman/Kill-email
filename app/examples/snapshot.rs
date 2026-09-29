@@ -8,6 +8,7 @@ use kill_email::mail::{FakeStore, MailStore};
 use kill_email::ops::Terminated;
 use kill_email::safety::SafetyRules;
 use kill_email::senders::group_by_sender;
+use kill_email::suggest::annotate;
 use kill_email::tui::app::{App, Effect, Progress};
 use kill_email::tui::setup::Setup;
 use kill_email::tui::ui;
@@ -51,20 +52,25 @@ fn main() {
         let folders = store.folders().unwrap();
         let msgs = store.scan("INBOX", 0, &mut |_, _| {}).unwrap();
         let rules = SafetyRules::new(&Safety::default(), store.sent_to.clone(), Utc::now());
+        let mut groups = group_by_sender(&msgs, &rules);
+        let trash = store.scan("Trash", 0, &mut |_, _| {}).unwrap();
+        annotate(
+            &mut groups,
+            &trash,
+            &Default::default(),
+            &Default::default(),
+            Utc::now(),
+        );
         app.on_update(Update::Scanned(Scan {
             folders,
-            groups: group_by_sender(&msgs, &rules),
+            groups,
             messages: msgs.len(),
             correspondents: 2,
         }));
-        // SocialNet and ShopMart: both marks. The Daily Brief: unsubscribe only.
-        // RideShare: kill only.
-        for key in [' ', ' ', 'n', ' '] {
-            app.on_key(KeyEvent::from(KeyCode::Char(key)));
+        // The board shows suggestions unmarked; the rest accept them
+        if screen != "board" {
+            app.on_key(KeyEvent::from(KeyCode::Char('a')));
         }
-        app.on_key(KeyEvent::from(KeyCode::Up));
-        app.on_key(KeyEvent::from(KeyCode::Char('n')));
-        app.on_key(KeyEvent::from(KeyCode::Up));
         app.status = None;
         match screen {
             "confirm" => {

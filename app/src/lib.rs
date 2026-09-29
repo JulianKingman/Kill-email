@@ -8,5 +8,6 @@ pub mod providers;
 pub mod safety;
 pub mod secrets;
 pub mod senders;
+pub mod suggest;
 pub mod tui;
 pub mod unsubscribe;
