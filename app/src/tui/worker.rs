@@ -16,12 +16,14 @@ use crate::senders::{SenderGroup, group_by_sender};
 pub type StoreFactory = Box<dyn FnOnce() -> Result<Box<dyn MailStore>> + Send>;
 
 pub enum Job {
-    Scan,
+    /// Scan with these safety rules (they may have changed in settings)
+    Scan(Safety),
     Terminate(Vec<SenderGroup>),
     Undo(String),
 }
 
 pub enum Update {
+    Connected,
     Progress {
         stage: &'static str,
         done: usize,
@@ -31,6 +33,8 @@ pub enum Update {
     Terminated(Terminated),
     Undone(Restored),
     Failed(String),
+    /// Could not log in; the thread has stopped
+    ConnectFailed(String),
 }
 
 pub struct Scan {
@@ -46,26 +50,24 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn spawn(
-        make_store: StoreFactory,
-        safety: Safety,
-        journal: Journal,
-        dry_run: bool,
-    ) -> Self {
+    pub fn spawn(make_store: StoreFactory, journal: Journal, dry_run: bool) -> Self {
         let (job_tx, job_rx) = mpsc::channel::<Job>();
         let (tx, rx) = mpsc::channel::<Update>();
         thread::spawn(move || {
             let mut store = match make_store() {
                 Ok(s) => s,
                 Err(e) => {
-                    let _ = tx.send(Update::Failed(format!("{e:#}")));
+                    let _ = tx.send(Update::ConnectFailed(format!("{e:#}")));
                     return;
                 }
             };
+            if tx.send(Update::Connected).is_err() {
+                return;
+            }
             let mut folders: Option<Folders> = None;
             for job in job_rx {
                 let result = match job {
-                    Job::Scan => scan(store.as_mut(), &safety, &tx).map(|s| {
+                    Job::Scan(safety) => scan(store.as_mut(), &safety, &tx).map(|s| {
                         folders = Some(s.folders.clone());
                         Update::Scanned(s)
                     }),

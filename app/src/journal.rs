@@ -35,6 +35,7 @@ pub struct Batch {
     pub undone: bool,
 }
 
+#[derive(Clone)]
 pub struct Journal {
     path: PathBuf,
 }

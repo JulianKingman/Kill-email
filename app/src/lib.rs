@@ -4,6 +4,8 @@ pub mod config;
 pub mod journal;
 pub mod mail;
 pub mod ops;
+pub mod providers;
 pub mod safety;
+pub mod secrets;
 pub mod senders;
 pub mod tui;

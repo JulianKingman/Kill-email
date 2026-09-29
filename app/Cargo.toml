@@ -11,6 +11,7 @@ crossterm = "0.29"
 directories = "6.0.0"
 imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 imap-proto = "0.16"
+keyring = "4"
 mail-parser = "0.11.9"
 ratatui = "0.30"
 rpassword = "7.5.4"

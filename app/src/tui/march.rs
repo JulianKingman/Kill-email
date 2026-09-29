@@ -5,23 +5,23 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 
-use super::theme::{AMBER, ASH, EMBER, PHOSPHOR};
+use super::theme::{ASH, EMBER, PHOSPHOR};
 
-const WIDTH: u16 = 7;
+const WIDTH: u16 = 5;
 /// Robot rows plus the ground row
-pub const HEIGHT: u16 = 6;
-const SPACING: u16 = 13;
-const ENVELOPE_EVERY: u16 = 4;
+pub const HEIGHT: u16 = 5;
+const SPACING: u16 = 9;
+const ENVELOPE_EVERY: u16 = 3;
 
-/// Each robot row is (glyphs, paint): r = body, d = shadow, e = eye, space = transparent
-const HEAD: [(&str, &str); 4] = [
-    (" ▄▄▄▄▄ ", " rrrrr "),
-    ("▐█▀█▀█▌", "rrererr"),
-    (" ▀███▀ ", " rrrrr "),
-    ("▗▟▓█▓▙▖", "rrdrdrr"),
-];
-const STRIDE: (&str, &str) = (" ▟▘ ▝▙ ", " rr rr ");
-const PASS: (&str, &str) = ("  ▐█▌  ", "  rrr  ");
+/// Each robot row is (glyphs, paint): d = dark body, e = visor, space = transparent.
+/// Deliberately crude: a helmet, one glowing slit, a trunk and two legs.
+const BODY: [(&str, &str); 3] = [(" ▄▄▄ ", " ddd "), ("▐▀▀▀▌", "deeed"), ("▝███▘", "ddddd")];
+const STRIDE: (&str, &str) = ("▗▘ ▝▖", "dd dd");
+const PASS: (&str, &str) = (" ▐ ▌ ", " d d ");
+
+/// Dark red for the silhouettes, so only the visors glow
+const HULL: ratatui::style::Color = ratatui::style::Color::Rgb(122, 20, 16);
+const VISOR_FLARE: ratatui::style::Color = ratatui::style::Color::Rgb(255, 150, 120);
 
 pub struct March {
     /// Animation clock; each step moves the squad one column
@@ -36,7 +36,8 @@ impl March {
         (0..count)
             .map(|i| {
                 let x = (self.tick + u64::from(i * SPACING)) % lane;
-                let stride = (self.tick / 2 + u64::from(i)).is_multiple_of(2);
+                // Lockstep: the whole squad moves its legs together
+                let stride = (self.tick / 2).is_multiple_of(2);
                 (x as i32 - i32::from(WIDTH), stride)
             })
             .collect()
@@ -74,16 +75,19 @@ impl Widget for March {
 
         for (x, stride) in robots {
             let legs = if stride { STRIDE } else { PASS };
-            for (row, (glyphs, paint)) in HEAD.iter().chain(std::iter::once(&legs)).enumerate() {
+            for (row, (glyphs, paint)) in BODY.iter().chain(std::iter::once(&legs)).enumerate() {
                 for (i, (g, p)) in glyphs.chars().zip(paint.chars()).enumerate() {
                     let col = x + i as i32;
                     if p == ' ' || col < 0 || col >= i32::from(area.width) {
                         continue;
                     }
                     let style = match p {
-                        'e' => Style::new().fg(AMBER).bg(PHOSPHOR),
-                        'd' => Style::new().fg(EMBER),
-                        _ => Style::new().fg(PHOSPHOR),
+                        // The visors flare together every couple of seconds
+                        'e' if self.tick.is_multiple_of(18) => {
+                            Style::new().fg(VISOR_FLARE).add_modifier(Modifier::BOLD)
+                        }
+                        'e' => Style::new().fg(PHOSPHOR).add_modifier(Modifier::BOLD),
+                        _ => Style::new().fg(HULL),
                     };
                     let pos = (area.x + col as u16, area.y + row as u16);
                     if let Some(cell) = buf.cell_mut(pos) {
@@ -101,7 +105,7 @@ mod tests {
 
     #[test]
     fn sprite_rows_line_up() {
-        for (glyphs, paint) in HEAD.iter().chain([&STRIDE, &PASS]) {
+        for (glyphs, paint) in BODY.iter().chain([&STRIDE, &PASS]) {
             assert_eq!(glyphs.chars().count(), WIDTH as usize, "{glyphs:?}");
             assert_eq!(paint.chars().count(), WIDTH as usize, "{paint:?}");
         }
@@ -114,7 +118,7 @@ mod tests {
         assert_eq!(a.len(), b.len());
         assert!(a.len() >= 4, "enough robots to fill the lane");
         assert_eq!(b[0].0, a[0].0 + 1, "one column per tick");
-        let far = March { tick: 60 + 13 }.robots(60);
+        let far = March { tick: 60 + 9 }.robots(60);
         assert_eq!(far[0].0, a[0].0, "the lane wraps around");
     }
 

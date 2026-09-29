@@ -1,21 +1,43 @@
-//! Screen state and what each key does. No drawing or I/O here, so it can be tested.
+//! Screen state and what each key does. No drawing or I/O here, so it can be tested:
+//! anything that touches the network, disk or keychain comes back as an [`Effect`].
 
 use std::collections::HashSet;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
+use super::settings::{Settings, SettingsAction};
+use super::setup::{Setup, SetupAction};
 use super::worker::{Job, Scan, Update};
+use crate::config::Config;
 use crate::journal::Batch;
 use crate::senders::{SenderGroup, SortBy};
 
 pub enum Mode {
+    Setup,
     Scanning,
     Board,
     Confirm,
     ConfirmUndo(Batch),
     Working,
     Help,
+    Settings,
+}
+
+/// Work the event loop does on the app's behalf
+pub enum Effect {
+    Job(Job),
+    /// Start a mail connection for this account
+    Connect {
+        config: Config,
+        password: String,
+    },
+    SaveSettings(Config),
+    StorePassword {
+        username: String,
+        password: String,
+    },
+    ForgetPassword(String),
 }
 
 pub struct Progress {
@@ -26,9 +48,14 @@ pub struct Progress {
 
 pub struct App {
     pub mode: Mode,
-    pub account: String,
+    pub config: Config,
     pub dry_run: bool,
     pub demo: bool,
+    pub password_saved: bool,
+    pub setup: Setup,
+    pub settings: Settings,
+    /// Set while a setup connection is in flight: the password to keep if it works
+    pending: Option<Pending>,
     pub folder: String,
     pub groups: Vec<SenderGroup>,
     pub table: TableState,
@@ -45,6 +72,11 @@ pub struct App {
     pub tick: u64,
 }
 
+struct Pending {
+    password: String,
+    remember: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Info,
@@ -53,12 +85,45 @@ pub enum Tone {
 }
 
 impl App {
-    pub fn new(account: String, dry_run: bool, demo: bool, last_batch: Option<Batch>) -> Self {
+    /// Start connected (a saved account and password were found)
+    pub fn connected(
+        config: Config,
+        password_saved: bool,
+        dry_run: bool,
+        demo: bool,
+        last: Option<Batch>,
+    ) -> Self {
+        let mut app = Self::blank(config, dry_run, demo, last);
+        app.password_saved = password_saved;
+        app.mode = Mode::Scanning;
+        app
+    }
+
+    /// Start on the setup screen
+    pub fn needs_setup(
+        setup: Setup,
+        config: Option<Config>,
+        dry_run: bool,
+        last: Option<Batch>,
+    ) -> Self {
+        let config = config
+            .unwrap_or_else(|| Config::new_account("", 993, "", crate::config::Security::Tls));
+        let mut app = Self::blank(config, dry_run, false, last);
+        app.setup = setup;
+        app.mode = Mode::Setup;
+        app
+    }
+
+    fn blank(config: Config, dry_run: bool, demo: bool, last_batch: Option<Batch>) -> Self {
         Self {
             mode: Mode::Scanning,
-            account,
+            config,
             dry_run,
             demo,
+            password_saved: false,
+            setup: Setup::new(None),
+            settings: Settings::open(),
+            pending: None,
             folder: "INBOX".into(),
             groups: Vec::new(),
             table: TableState::default(),
@@ -75,6 +140,14 @@ impl App {
             last_batch,
             quit: false,
             tick: 0,
+        }
+    }
+
+    pub fn account(&self) -> &str {
+        if self.demo {
+            "demo@killall.email"
+        } else {
+            &self.config.account.username
         }
     }
 
@@ -113,54 +186,57 @@ impl App {
         (chosen.len(), messages, bytes)
     }
 
-    pub fn on_update(&mut self, update: Update) {
+    fn scan(&mut self, stage: &'static str) -> Effect {
+        self.mode = Mode::Scanning;
+        self.progress = Progress {
+            stage,
+            done: 0,
+            total: 0,
+        };
+        Effect::Job(Job::Scan(self.config.safety.clone()))
+    }
+
+    pub fn on_update(&mut self, update: Update) -> Vec<Effect> {
         match update {
+            Update::Connected => {
+                let mut effects = Vec::new();
+                if let Some(p) = self.pending.take() {
+                    // A new account from setup worked: keep it
+                    effects.push(Effect::SaveSettings(self.config.clone()));
+                    if p.remember {
+                        effects.push(Effect::StorePassword {
+                            username: self.config.account.username.clone(),
+                            password: p.password,
+                        });
+                    }
+                    self.groups.clear();
+                    self.last_batch = None;
+                }
+                effects.push(self.scan("Scanning"));
+                effects
+            }
+            Update::ConnectFailed(e) => {
+                let message = friendly_login_error(&e);
+                if self.pending.take().is_some() || matches!(self.mode, Mode::Setup) {
+                    self.setup.failed(message);
+                } else {
+                    // The saved password stopped working: ask again
+                    self.setup = Setup::ask_password(self.config.clone(), Some(message));
+                }
+                self.mode = Mode::Setup;
+                Vec::new()
+            }
             Update::Progress { stage, done, total } => {
                 self.progress = Progress { stage, done, total };
+                Vec::new()
             }
-            Update::Scanned(scan) => self.load(scan),
+            Update::Scanned(scan) => {
+                self.load(scan);
+                Vec::new()
+            }
             Update::Terminated(t) => {
-                let verb = if t.dry_run {
-                    "Would terminate"
-                } else {
-                    "Terminated"
-                };
-                let tail = if t.dry_run {
-                    " (dry run: nothing moved)"
-                } else {
-                    ". Press u to undo"
-                };
-                let senders = if t.senders == 1 { "sender" } else { "senders" };
-                self.say(
-                    format!(
-                        "{verb} {} messages from {} {senders}{tail}",
-                        t.messages, t.senders
-                    ),
-                    Tone::Good,
-                );
-                if !t.dry_run {
-                    let chosen: HashSet<String> = std::mem::take(&mut self.marked);
-                    let current = self.selected().map(|g| g.address.clone());
-                    for g in &mut self.groups {
-                        if chosen.contains(&g.address)
-                            || (chosen.is_empty() && Some(&g.address) == current.as_ref())
-                        {
-                            g.total -= g.targets.len();
-                            g.unread = g.unread.min(g.total);
-                            g.targets.clear();
-                        }
-                    }
-                    self.last_batch = Some(Batch {
-                        id: t.batch,
-                        at: chrono::Utc::now(),
-                        messages: t.messages,
-                        senders: Vec::new(),
-                        undone: false,
-                    });
-                } else {
-                    self.marked.clear();
-                }
-                self.mode = Mode::Board;
+                self.terminated(t);
+                Vec::new()
             }
             Update::Undone(r) => {
                 let missing = if r.missing > 0 {
@@ -173,7 +249,7 @@ impl App {
                     Tone::Good,
                 );
                 self.last_batch = None;
-                self.mode = Mode::Scanning;
+                vec![self.scan("Rescanning")]
             }
             Update::Failed(e) => {
                 self.say(e, Tone::Warn);
@@ -182,8 +258,53 @@ impl App {
                 } else {
                     Mode::Board
                 };
+                Vec::new()
             }
         }
+    }
+
+    fn terminated(&mut self, t: crate::ops::Terminated) {
+        let verb = if t.dry_run {
+            "Would terminate"
+        } else {
+            "Terminated"
+        };
+        let tail = if t.dry_run {
+            " (dry run: nothing moved)"
+        } else {
+            ". Press u to undo"
+        };
+        let senders = if t.senders == 1 { "sender" } else { "senders" };
+        self.say(
+            format!(
+                "{verb} {} messages from {} {senders}{tail}",
+                t.messages, t.senders
+            ),
+            Tone::Good,
+        );
+        if t.dry_run {
+            self.marked.clear();
+        } else {
+            let chosen: HashSet<String> = std::mem::take(&mut self.marked);
+            let current = self.selected().map(|g| g.address.clone());
+            for g in &mut self.groups {
+                if chosen.contains(&g.address)
+                    || (chosen.is_empty() && Some(&g.address) == current.as_ref())
+                {
+                    g.total -= g.targets.len();
+                    g.unread = g.unread.min(g.total);
+                    g.targets.clear();
+                }
+            }
+            self.last_batch = Some(Batch {
+                id: t.batch,
+                at: chrono::Utc::now(),
+                messages: t.messages,
+                senders: Vec::new(),
+                undone: false,
+            });
+        }
+        self.mode = Mode::Board;
     }
 
     fn load(&mut self, scan: Scan) {
@@ -201,26 +322,36 @@ impl App {
         self.mode = Mode::Board;
     }
 
-    fn say(&mut self, text: impl Into<String>, tone: Tone) {
+    pub fn say(&mut self, text: impl Into<String>, tone: Tone) {
         self.status = Some((text.into(), tone));
     }
 
-    /// Handle a key; returns work for the mail thread when the key starts some
-    pub fn on_key(&mut self, key: KeyEvent) -> Option<Job> {
+    pub fn on_paste(&mut self, text: &str) {
+        match self.mode {
+            Mode::Setup => self.setup.paste(text),
+            Mode::Settings => self.settings.paste(text),
+            _ => {}
+        }
+    }
+
+    /// Handle a key; returns work for the event loop
+    pub fn on_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
-            return None;
+            return Vec::new();
         }
         match self.mode {
+            Mode::Setup => self.on_setup_key(key),
+            Mode::Settings => self.on_settings_key(key),
             Mode::Scanning | Mode::Working => {
                 if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
                     self.quit = true;
                 }
-                None
+                Vec::new()
             }
             Mode::Help => {
                 self.mode = Mode::Board;
-                None
+                Vec::new()
             }
             Mode::Confirm => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -231,12 +362,12 @@ impl App {
                         done: 0,
                         total: 0,
                     };
-                    Some(Job::Terminate(groups))
+                    vec![Effect::Job(Job::Terminate(groups))]
                 }
                 _ => {
                     self.mode = Mode::Board;
                     self.say("Cancelled. Nothing was moved", Tone::Info);
-                    None
+                    Vec::new()
                 }
             },
             Mode::ConfirmUndo(ref batch) => match key.code {
@@ -248,18 +379,81 @@ impl App {
                         done: 0,
                         total: 0,
                     };
-                    Some(Job::Undo(id))
+                    vec![Effect::Job(Job::Undo(id))]
                 }
                 _ => {
                     self.mode = Mode::Board;
-                    None
+                    Vec::new()
                 }
             },
             Mode::Board => self.on_board_key(key),
         }
     }
 
-    fn on_board_key(&mut self, key: KeyEvent) -> Option<Job> {
+    fn on_setup_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        match self.setup.on_key(key) {
+            SetupAction::None => Vec::new(),
+            SetupAction::Cancel => {
+                self.mode = if self.groups.is_empty() {
+                    Mode::Scanning
+                } else {
+                    Mode::Board
+                };
+                Vec::new()
+            }
+            SetupAction::Connect {
+                config,
+                password,
+                remember,
+            } => {
+                let config = *config;
+                self.config = config.clone();
+                self.pending = Some(Pending {
+                    password: password.clone(),
+                    remember,
+                });
+                vec![Effect::Connect { config, password }]
+            }
+        }
+    }
+
+    fn on_settings_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        match self.settings.on_key(key, &mut self.config) {
+            SettingsAction::None => Vec::new(),
+            SettingsAction::Close { changed } => {
+                self.mode = Mode::Board;
+                if !changed {
+                    return Vec::new();
+                }
+                self.say("Settings saved", Tone::Good);
+                let mut effects = Vec::new();
+                if !self.demo {
+                    effects.push(Effect::SaveSettings(self.config.clone()));
+                }
+                effects.push(self.scan("Rescanning with the new settings"));
+                effects
+            }
+            SettingsAction::ChangeAccount => {
+                if self.demo {
+                    self.settings.note = Some("The demo inbox has no account to change.".into());
+                    return Vec::new();
+                }
+                self.setup = Setup::new(Some(self.config.clone()));
+                self.mode = Mode::Setup;
+                Vec::new()
+            }
+            SettingsAction::ForgetPassword => {
+                if !self.password_saved {
+                    return Vec::new();
+                }
+                self.password_saved = false;
+                self.settings.note = Some("Forgotten. You'll be asked for it next time.".into());
+                vec![Effect::ForgetPassword(self.config.account.username.clone())]
+            }
+        }
+    }
+
+    fn on_board_key(&mut self, key: KeyEvent) -> Vec<Effect> {
         let len = self.groups.len();
         let current = self.table.selected().unwrap_or(0);
         match key.code {
@@ -295,19 +489,15 @@ impl App {
                 Some(b) if !b.undone => self.mode = Mode::ConfirmUndo(b),
                 _ => self.say("Nothing to undo", Tone::Info),
             },
-            KeyCode::Char('r') => {
-                self.mode = Mode::Scanning;
-                self.progress = Progress {
-                    stage: "Rescanning",
-                    done: 0,
-                    total: 0,
-                };
-                return Some(Job::Scan);
+            KeyCode::Char('r') => return vec![self.scan("Rescanning")],
+            KeyCode::Char(',') => {
+                self.settings = Settings::open();
+                self.mode = Mode::Settings;
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
             _ => {}
         }
-        None
+        Vec::new()
     }
 
     fn toggle_mark(&mut self) {
@@ -338,18 +528,36 @@ impl App {
 
     fn nothing_to_do_reason(&self) -> String {
         match self.selected() {
-            Some(g) if g.protected.is_some() => {
-                format!(
-                    "{} is protected: {}",
-                    g.address,
-                    g.protected.map(|h| h.label()).unwrap_or("")
-                )
-            }
+            Some(g) if g.protected.is_some() => format!(
+                "{} is protected: {}",
+                g.address,
+                g.protected.map(|h| h.label()).unwrap_or("")
+            ),
             Some(g) if g.targets.is_empty() => {
                 format!("Everything from {} is protected", g.address)
             }
             _ => "Mark senders with space first".into(),
         }
+    }
+}
+
+/// Server errors are terse; say what to do about the common ones
+fn friendly_login_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("login failed")
+        || lower.contains("authenticationfailed")
+        || lower.contains("invalid credentials")
+    {
+        "That address and password didn't work. Most providers need an app password here, not your normal password.".into()
+    } else if lower.contains("could not connect")
+        || lower.contains("dns")
+        || lower.contains("resolve")
+    {
+        format!(
+            "Couldn't reach the mail server. Check your connection and the server name. ({raw})"
+        )
+    } else {
+        raw.to_string()
     }
 }
 
@@ -359,17 +567,22 @@ mod tests {
     use crossterm::event::KeyEvent;
 
     use super::*;
-    use crate::config::Safety;
+    use crate::config::{Safety, Security};
     use crate::mail::{FakeStore, MailStore};
     use crate::safety::SafetyRules;
     use crate::senders::group_by_sender;
+    use crate::tui::setup::Step;
+
+    fn config() -> Config {
+        Config::new_account("imap.gmail.com", 993, "me@gmail.com", Security::Tls)
+    }
 
     fn loaded() -> App {
         let mut store = FakeStore::demo();
         let folders = store.folders().unwrap();
         let msgs = store.scan("INBOX", 0, &mut |_, _| {}).unwrap();
         let rules = SafetyRules::new(&Safety::default(), store.sent_to.clone(), Utc::now());
-        let mut app = App::new("demo".into(), false, true, None);
+        let mut app = App::connected(config(), true, false, false, None);
         app.on_update(Update::Scanned(Scan {
             folders,
             groups: group_by_sender(&msgs, &rules),
@@ -379,20 +592,20 @@ mod tests {
         app
     }
 
-    fn press(app: &mut App, c: char) -> Option<Job> {
-        app.on_key(KeyEvent::from(KeyCode::Char(c)))
+    fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
+        app.on_key(KeyEvent::from(code))
     }
 
     #[test]
     fn marking_and_confirming_sends_the_marked_senders() {
         let mut app = loaded();
-        press(&mut app, ' ');
-        press(&mut app, ' ');
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char(' '));
         assert_eq!(app.marked.len(), 2);
-        assert!(press(&mut app, 'd').is_none());
+        assert!(press(&mut app, KeyCode::Char('d')).is_empty());
         assert!(matches!(app.mode, Mode::Confirm));
-        match press(&mut app, 'y') {
-            Some(Job::Terminate(groups)) => assert_eq!(groups.len(), 2),
+        match press(&mut app, KeyCode::Char('y')).pop() {
+            Some(Effect::Job(Job::Terminate(groups))) => assert_eq!(groups.len(), 2),
             _ => panic!("expected a terminate job"),
         }
     }
@@ -406,18 +619,80 @@ mod tests {
             .position(|g| g.address == "mom@family.example")
             .unwrap();
         app.table.select(Some(mom));
-        press(&mut app, ' ');
+        press(&mut app, KeyCode::Char(' '));
         assert!(app.marked.is_empty());
-        press(&mut app, 'd');
+        press(&mut app, KeyCode::Char('d'));
         assert!(matches!(app.mode, Mode::Board), "nothing to confirm");
     }
 
     #[test]
     fn cancelling_moves_nothing() {
         let mut app = loaded();
-        press(&mut app, 'd');
+        press(&mut app, KeyCode::Char('d'));
         assert!(matches!(app.mode, Mode::Confirm));
-        assert!(press(&mut app, 'n').is_none());
+        assert!(press(&mut app, KeyCode::Char('n')).is_empty());
         assert!(matches!(app.mode, Mode::Board));
+    }
+
+    #[test]
+    fn successful_setup_saves_settings_password_and_scans() {
+        let mut app = App::needs_setup(Setup::new(None), None, false, None);
+        press(&mut app, KeyCode::Enter); // Gmail
+        for c in "me@gmail.com".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Tab);
+        app.on_paste("app-password");
+        let effects = press(&mut app, KeyCode::Enter);
+        assert!(matches!(effects.as_slice(), [Effect::Connect { .. }]));
+
+        let effects = app.on_update(Update::Connected);
+        assert!(
+            matches!(effects[0], Effect::SaveSettings(ref c) if c.account.username == "me@gmail.com")
+        );
+        assert!(
+            matches!(effects[1], Effect::StorePassword { ref password, .. } if password == "app-password")
+        );
+        assert!(matches!(effects[2], Effect::Job(Job::Scan(_))));
+        assert!(matches!(app.mode, Mode::Scanning));
+    }
+
+    #[test]
+    fn failed_login_returns_to_the_password() {
+        let mut app = App::needs_setup(Setup::new(None), None, false, None);
+        press(&mut app, KeyCode::Enter);
+        for c in "me@gmail.com".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Tab);
+        app.on_paste("wrong");
+        press(&mut app, KeyCode::Enter);
+        app.on_update(Update::ConnectFailed(
+            "login failed for me@gmail.com: no".into(),
+        ));
+        assert!(matches!(app.mode, Mode::Setup));
+        assert_eq!(app.setup.step, Step::Form);
+        assert!(app.setup.error.as_deref().unwrap().contains("app password"));
+    }
+
+    #[test]
+    fn a_stale_saved_password_asks_again() {
+        let mut app = App::connected(config(), true, false, false, None);
+        app.on_update(Update::ConnectFailed("login failed".into()));
+        assert!(matches!(app.mode, Mode::Setup));
+        assert_eq!(app.setup.step, Step::Form);
+    }
+
+    #[test]
+    fn changed_settings_are_saved_and_rescanned() {
+        let mut app = loaded();
+        press(&mut app, KeyCode::Char(','));
+        assert!(matches!(app.mode, Mode::Settings));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        let effects = press(&mut app, KeyCode::Esc);
+        assert_eq!(app.config.safety.recent_days, 30);
+        assert!(matches!(effects[0], Effect::SaveSettings(ref c) if c.safety.recent_days == 30));
+        assert!(matches!(effects[1], Effect::Job(Job::Scan(ref s)) if s.recent_days == 30));
     }
 }

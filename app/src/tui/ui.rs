@@ -26,6 +26,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     match app.mode {
         Mode::Scanning => draw_scanning(f, body, app),
+        Mode::Setup => draw_backdrop(f, body),
         _ => draw_board(f, body, app),
     }
     draw_footer(f, footer, app);
@@ -46,6 +47,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         Mode::Working => draw_working(f, area, app),
         Mode::Help => draw_help(f, area),
+        Mode::Setup => app.setup.draw(f, body, app.tick),
+        Mode::Settings => app
+            .settings
+            .draw(f, body, &app.config, app.password_saved, app.demo),
         _ => {}
     }
 }
@@ -54,9 +59,21 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![
         Span::styled(format!(" {MARK} "), theme::title()),
         Span::styled("KILL ALL EMAIL", theme::title()),
-        Span::styled("  ·  MODE: KILL LIST", Style::new().fg(AMBER)),
-        Span::styled(format!("  ·  {}", app.account), theme::muted()),
+        Span::styled(
+            if matches!(app.mode, Mode::Setup) {
+                "  ·  SETUP"
+            } else {
+                "  ·  MODE: KILL LIST"
+            },
+            Style::new().fg(AMBER),
+        ),
     ];
+    if !app.account().is_empty() {
+        spans.push(Span::styled(
+            format!("  ·  {}", app.account()),
+            theme::muted(),
+        ));
+    }
     if app.messages > 0 {
         spans.push(Span::styled(
             format!("  ·  {} {}", app.folder, thousands(app.messages)),
@@ -81,6 +98,18 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         .borders(ratatui::widgets::Borders::BOTTOM)
         .border_style(theme::border());
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+}
+
+/// The logo on its own, behind the setup panel
+fn draw_backdrop(f: &mut Frame, area: Rect) {
+    if area.width as usize >= LOGO[0].chars().count() + 4 && area.height >= 30 {
+        let logo: Vec<Line> = LOGO
+            .iter()
+            .map(|l| Line::from(*l).style(Style::new().fg(EMBER)))
+            .collect();
+        let [top] = Layout::vertical([Constraint::Length(LOGO.len() as u16 + 1)]).areas(area);
+        f.render_widget(Paragraph::new(logo).alignment(Alignment::Center), top);
+    }
 }
 
 fn draw_scanning(f: &mut Frame, area: Rect, app: &App) {
@@ -357,9 +386,12 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             ("u", "undo"),
             ("s", "sort"),
             ("r", "rescan"),
+            (",", "settings"),
             ("?", "help"),
             ("q", "quit"),
         ],
+        // Setup and settings show their own keys, and q is just a letter there
+        Mode::Setup | Mode::Settings => &[],
         _ => &[("q", "quit")],
     };
     let mut spans = vec![Span::raw(" ")];
@@ -457,6 +489,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ("u", "undo the last termination"),
         ("s", "sort: most mail, least read, oldest"),
         ("r", "rescan the inbox"),
+        (",", "settings: account, what to protect, how much to scan"),
         ("q", "quit"),
     ];
     let mut text: Vec<Line> = rows
@@ -531,6 +564,15 @@ fn ago(d: chrono::DateTime<Utc>) -> String {
         60..=729 => format!("{}mo", days / 30),
         _ => format!("{}y", days / 365),
     }
+}
+
+/// Rows these lines take once wrapped to `width` columns
+pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    lines
+        .iter()
+        .map(|l| l.width().max(1).div_ceil(width) as u16)
+        .sum()
 }
 
 #[cfg(test)]

@@ -9,15 +9,18 @@ use kill_email::journal::Journal;
 use kill_email::mail::{FakeStore, ImapStore, MailStore};
 use kill_email::ops;
 use kill_email::safety::SafetyRules;
+use kill_email::secrets;
 use kill_email::senders::group_by_sender;
-use kill_email::tui::{self, app::App, ui::thousands, worker::Worker};
+use kill_email::tui::{self, Runtime, app::App, setup::Setup, ui::thousands, worker::Worker};
 
 /// Find the junk in your inbox and move it to Trash, without touching what matters.
+///
+/// Run with no arguments to set up your account and start.
 #[derive(Parser)]
 #[command(name = "kill-email", version)]
 struct Cli {
-    /// Settings file (default: your config folder, see `kill-email init`)
-    #[arg(long, global = true)]
+    /// Use a different settings file (for testing)
+    #[arg(long, global = true, hide = true)]
     config: Option<PathBuf>,
 
     /// Show what would happen without moving any mail
@@ -34,8 +37,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Write a settings file to fill in
-    Init,
     /// Scan without the interface and print the loudest senders
     Scan {
         /// How many senders to list
@@ -60,7 +61,6 @@ fn main() -> Result<()> {
     };
 
     match cli.command {
-        Some(Command::Init) => init(&config_path),
         Some(Command::Scan { top }) => scan(&config_path, top),
         Some(Command::Undo { batch, list }) => undo(&config_path, batch, list),
         None if cli.demo => run_demo(cli.dry_run),
@@ -68,27 +68,20 @@ fn main() -> Result<()> {
     }
 }
 
-fn init(path: &Path) -> Result<()> {
-    if path.exists() {
-        bail!("{} already exists; edit it directly", path.display());
-    }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, config::EXAMPLE)?;
-    println!(
-        "Wrote {}. Fill in your mail server and username, then run `kill-email`.",
-        path.display()
-    );
-    Ok(())
-}
-
+/// For the command-line tools: the saved password, or ask for it
 fn password(config: &Config) -> Result<String> {
-    if let Ok(p) = std::env::var("KILL_EMAIL_PASSWORD") {
+    if let Some(p) = secrets::load(&config.account.username) {
         return Ok(p);
     }
     rpassword::prompt_password(format!("Password for {}: ", config.account.username))
         .context("could not read the password")
+}
+
+fn load_config(path: &Path) -> Result<Config> {
+    if !path.exists() {
+        bail!("no account set up yet. Run `kill-email` to set one up");
+    }
+    Config::load(path)
 }
 
 fn connect(config: &Config) -> Result<ImapStore> {
@@ -97,22 +90,40 @@ fn connect(config: &Config) -> Result<ImapStore> {
 }
 
 fn run_tui(config_path: &Path, dry_run: bool) -> Result<()> {
-    let config = Config::load(config_path)?;
-    // Ask for the password before the screen switches to the interface
-    let pw = password(&config)?;
     let journal = Journal::new(config::journal_path()?);
     let last = journal.batches()?.into_iter().find(|b| !b.undone);
-    let account = config.account.clone();
-    let worker = Worker::spawn(
-        Box::new(move || Ok(Box::new(ImapStore::connect(&account, &pw)?) as Box<dyn MailStore>)),
-        config.safety.clone(),
+    let rt = Runtime {
+        config_path: config_path.to_path_buf(),
         journal,
         dry_run,
-    );
-    tui::run(
-        App::new(config.account.username.clone(), dry_run, false, last),
-        worker,
-    )
+    };
+
+    let saved = if config_path.exists() {
+        Some(Config::load(config_path)?)
+    } else {
+        None
+    };
+    let (app, worker) = match saved {
+        Some(config) => match secrets::load(&config.account.username) {
+            Some(password) => {
+                let worker = tui::imap_worker(config.account.clone(), password, &rt);
+                let from_keychain = std::env::var("KILL_EMAIL_PASSWORD").is_err();
+                (
+                    App::connected(config, from_keychain, dry_run, false, last),
+                    Some(worker),
+                )
+            }
+            None => {
+                let setup = Setup::ask_password(config.clone(), None);
+                (App::needs_setup(setup, Some(config), dry_run, last), None)
+            }
+        },
+        None => (
+            App::needs_setup(Setup::new(None), None, dry_run, last),
+            None,
+        ),
+    };
+    tui::run(app, worker, rt)
 }
 
 fn run_demo(dry_run: bool) -> Result<()> {
@@ -122,18 +133,24 @@ fn run_demo(dry_run: bool) -> Result<()> {
     );
     let worker = Worker::spawn(
         Box::new(|| Ok(Box::new(FakeStore::demo()) as Box<dyn MailStore>)),
-        config::Safety::default(),
-        journal,
+        journal.clone(),
         dry_run,
     );
+    let rt = Runtime {
+        config_path: std::env::temp_dir().join("kill-email-demo-settings.toml"),
+        journal,
+        dry_run,
+    };
+    let config = Config::new_account("", 993, "", config::Security::Tls);
     tui::run(
-        App::new("demo@killall.email".into(), dry_run, true, None),
-        worker,
+        App::connected(config, false, dry_run, true, None),
+        Some(worker),
+        rt,
     )
 }
 
 fn scan(config_path: &Path, top: usize) -> Result<()> {
-    let config = Config::load(config_path)?;
+    let config = load_config(config_path)?;
     let mut store = connect(&config)?;
     let folders = store.folders()?;
     let sent = match &folders.sent {
@@ -204,7 +221,7 @@ fn undo(config_path: &Path, batch: Option<String>, list: bool) -> Result<()> {
             .map(|b| b.id.clone())
             .context("nothing to undo")?,
     };
-    let config = Config::load(config_path)?;
+    let config = load_config(config_path)?;
     let mut store = connect(&config)?;
     let r = ops::undo(&mut store, &journal, &id)?;
     println!(

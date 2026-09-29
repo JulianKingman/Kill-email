@@ -104,7 +104,7 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| {
             format!(
-                "no settings at {}. Run `kill-email init` to create them",
+                "no settings at {}. Run `kill-email` to set up your account",
                 path.display()
             )
         })?;
@@ -112,6 +112,33 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("could not read {}", path.display()))?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Settings written by the app. The password is never part of them.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let text = format!(
+            "# Kill All Email settings. Change them in the app (press ,) rather than here.\n\n{}",
+            toml::to_string_pretty(self)?
+        );
+        std::fs::write(path, text).with_context(|| format!("could not save {}", path.display()))
+    }
+
+    pub fn new_account(host: &str, port: u16, username: &str, security: Security) -> Self {
+        Self {
+            account: Account {
+                host: host.into(),
+                port,
+                username: username.into(),
+                security,
+                inbox: default_inbox(),
+                trash: None,
+                sent: None,
+            },
+            safety: Safety::default(),
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -128,40 +155,33 @@ impl Config {
     }
 }
 
-pub const EXAMPLE: &str = r#"# Kill All Email settings
-
-[account]
-# Gmail: imap.gmail.com, and use an app password (Google Account > Security > App passwords)
-# Outlook: outlook.office365.com   Yahoo: imap.mail.yahoo.com   iCloud: imap.mail.me.com
-host = "imap.gmail.com"
-port = 993
-username = "you@example.com"
-security = "tls"          # tls | starttls
-# trash = "[Gmail]/Trash"  # only needed if your server doesn't mark its Trash folder
-# sent = "[Gmail]/Sent Mail"
-
-[safety]
-recent_days = 14          # never delete mail newer than this
-trusted = []              # e.g. ["boss@work.com", "@family.org"]
-scan_limit = 0            # 0 scans the whole inbox
-"#;
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn example_config_parses() {
-        let config: Config = toml::from_str(EXAMPLE).unwrap();
-        assert_eq!(config.account.port, 993);
-        assert_eq!(config.account.security, Security::Tls);
-        assert_eq!(config.safety.recent_days, 14);
+    fn saved_settings_load_back() {
+        let dir = std::env::temp_dir().join(format!("kill-email-config-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let mut config = Config::new_account("imap.gmail.com", 993, "me@gmail.com", Security::Tls);
+        config.safety.trusted.push("@family.org".into());
+        config.save(&path).unwrap();
+        let back = Config::load(&path).unwrap();
+        assert_eq!(back.account.host, "imap.gmail.com");
+        assert_eq!(back.safety.trusted, vec!["@family.org".to_string()]);
+        assert_eq!(back.safety.recent_days, 14);
+        // Protected subjects mention "password reset", but no password setting is ever written
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("password =")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn plaintext_only_on_localhost() {
-        let mut config: Config = toml::from_str(EXAMPLE).unwrap();
-        config.account.security = Security::None;
+        let mut config = Config::new_account("imap.gmail.com", 993, "me@gmail.com", Security::None);
         assert!(config.validate().is_err());
         config.account.host = "127.0.0.1".into();
         assert!(config.validate().is_ok());

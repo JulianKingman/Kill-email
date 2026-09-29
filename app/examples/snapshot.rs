@@ -8,6 +8,7 @@ use kill_email::mail::{FakeStore, MailStore};
 use kill_email::safety::SafetyRules;
 use kill_email::senders::group_by_sender;
 use kill_email::tui::app::{App, Progress};
+use kill_email::tui::setup::Setup;
 use kill_email::tui::ui;
 use kill_email::tui::worker::{Scan, Update};
 use ratatui::Terminal;
@@ -21,8 +22,18 @@ fn main() {
     let screen = args.get(3).map(String::as_str).unwrap_or("board");
     let tick: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
-    let mut app = App::new("you@example.com".into(), false, true, None);
-    if screen == "scanning" {
+    let config = kill_email::config::Config::new_account(
+        "imap.gmail.com",
+        993,
+        "you@example.com",
+        kill_email::config::Security::Tls,
+    );
+    let mut app = if screen.starts_with("setup") {
+        App::needs_setup(Setup::new(None), None, false, None)
+    } else {
+        App::connected(config, true, false, false, None)
+    };
+    if screen == "scanning" || screen.starts_with("setup") {
         app.progress = Progress {
             stage: "Scanning",
             done: 18_250,
@@ -53,6 +64,20 @@ fn main() {
     }
 
     app.tick = tick;
+    match screen {
+        "setup-form" => {
+            app.on_key(KeyEvent::from(KeyCode::Enter));
+            for c in "you@gmail.com".chars() {
+                app.on_key(KeyEvent::from(KeyCode::Char(c)));
+            }
+            app.on_key(KeyEvent::from(KeyCode::Tab));
+            app.on_paste("abcdefghijklmnop");
+        }
+        "settings" => {
+            app.on_key(KeyEvent::from(KeyCode::Char(',')));
+        }
+        _ => {}
+    }
     if screen == "working" {
         app.on_key(KeyEvent::from(KeyCode::Enter));
         app.on_key(KeyEvent::from(KeyCode::Char('y')));
