@@ -5,6 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kill All Email</title>
 <meta name="description" content="A terminal app that finds the junk in your inbox, unsubscribes you, and deletes it. The AI runs on your machine.">
+<meta name="theme-color" content="#0b0304">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="canonical" href="https://killall.email/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://killall.email/">
+<meta property="og:title" content="Kill All Email">
+<meta property="og:description" content="Finds the junk in your inbox, unsubscribes you, and deletes it. The AI runs on your machine.">
+<meta property="og:image" content="https://killall.email/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Kill All Email: a pixel envelope in target brackets beside the name">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=VT323&display=swap">
@@ -118,7 +132,8 @@ body:not(.crt) .crt-overlay { display: none; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.bar .mark { font-family: var(--display); font-size: 1.6rem; letter-spacing: 0.04em; color: var(--phosphor); text-transform: none; }
+.bar .mark { display: inline-flex; align-items: center; gap: 0.6rem; font-family: var(--display); font-size: 1.6rem; letter-spacing: 0.04em; color: var(--phosphor); text-transform: none; text-decoration: none; }
+.bar .mark img { width: 2.1rem; height: auto; image-rendering: pixelated; filter: drop-shadow(0 0 5px rgb(255 59 46 / 0.5)); }
 .bar nav { display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: center; }
 .bar nav a { color: var(--ash); text-decoration: none; }
 .bar nav a:hover { color: var(--bone); }
@@ -325,7 +340,7 @@ footer {
 
 <main class="wrap">
   <header class="bar">
-    <span class="mark glow">kill-email</span>
+    <a class="mark glow" href="/" aria-label="Kill All Email home"><img src="/brand/logo.svg" alt="" width="36" height="36">kill-email</a>
     <nav aria-label="Sections">
       <a href="#modes">Modes</a>
       <a href="#safety">Safety</a>
