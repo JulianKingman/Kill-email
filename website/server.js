@@ -23,6 +23,9 @@ const TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
+  // Install scripts, fetched with curl or irm
+  '.sh': 'text/plain; charset=utf-8',
+  '.ps1': 'text/plain; charset=utf-8',
 };
 
 const SECURITY_HEADERS = {

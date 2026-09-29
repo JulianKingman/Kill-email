@@ -6,21 +6,21 @@ This is the Kill List: sort senders by volume, delete them and unsubscribe from 
 
 ## Get it
 
-Download a build from the repository's Actions tab (the latest **release** run, under Artifacts), or from Releases once there is one:
-
-- **macOS** (Apple Silicon and Intel): `kill-email-macos.tar.gz`
-- **Linux** (x86_64): `kill-email-linux-x86_64.tar.gz`
-- **Windows** (x86_64): `kill-email-windows-x86_64.zip`
-
-On macOS the build isn't signed yet, so the first time, clear the download flag before running it:
+macOS or Linux, in a terminal:
 
 ```bash
-tar -xzf kill-email-macos.tar.gz
-xattr -d com.apple.quarantine kill-email
-./kill-email
+curl -fsSL https://killall.email/install.sh | sh
 ```
 
-Or build it yourself with Rust installed: `cargo build --release`, and the binary is `target/release/kill-email`.
+Windows, in PowerShell:
+
+```powershell
+irm https://killall.email/install.ps1 | iex
+```
+
+That downloads the latest build, puts `kill-email` in `~/.local/bin` (or `%LOCALAPPDATA%\kill-email` on Windows) and starts it. Run the same line again to update. Add `-s -- --demo` after `sh` to start on the made-up inbox instead, or set `KILL_EMAIL_NO_RUN=1` to install without starting.
+
+The builds are also on the repository's [nightly release](https://github.com/JulianKingman/Kill-email/releases/tag/nightly), or build it yourself with Rust installed: `cargo build --release`, and the binary is `target/release/kill-email`.
 
 ## Use it
 
