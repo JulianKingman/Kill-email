@@ -16,6 +16,8 @@ pub struct Terminated {
     pub batch: String,
     pub messages: usize,
     pub senders: usize,
+    /// How many messages each sender lost
+    pub trashed: Vec<(String, usize)>,
     pub dry_run: bool,
 }
 
@@ -70,6 +72,10 @@ pub fn terminate(
         batch,
         messages: total,
         senders: groups.len(),
+        trashed: groups
+            .iter()
+            .map(|g| (g.address.clone(), g.targets.len()))
+            .collect(),
         dry_run,
     })
 }

@@ -133,6 +133,7 @@ fn run_demo(dry_run: bool) -> Result<()> {
     );
     let worker = Worker::spawn(
         Box::new(|| Ok(Box::new(FakeStore::demo()) as Box<dyn MailStore>)),
+        Box::new(kill_email::unsubscribe::Pretend::default()),
         journal.clone(),
         dry_run,
     );

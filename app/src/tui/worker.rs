@@ -7,19 +7,39 @@ use anyhow::Result;
 use chrono::Utc;
 
 use crate::config::Safety;
-use crate::journal::Journal;
+use crate::journal::{Journal, Record};
 use crate::mail::{Folders, MailStore};
 use crate::ops::{self, Restored, Terminated};
 use crate::safety::SafetyRules;
 use crate::senders::{SenderGroup, group_by_sender};
+use crate::unsubscribe::{Channels, Method, Pretend, unsubscribe};
 
 pub type StoreFactory = Box<dyn FnOnce() -> Result<Box<dyn MailStore>> + Send>;
 
 pub enum Job {
     /// Scan with these safety rules (they may have changed in settings)
     Scan(Safety),
-    Terminate(Vec<SenderGroup>),
+    Kill(Kill),
     Undo(String),
+}
+
+/// What to do to a set of senders
+pub struct Kill {
+    pub groups: Vec<SenderGroup>,
+    /// Move their mail to Trash
+    pub trash: bool,
+    /// Unsubscribe from the ones that offer a way out
+    pub unsubscribe: bool,
+}
+
+pub struct Killed {
+    pub terminated: Option<Terminated>,
+    pub unsubscribed: Vec<Unsubscribed>,
+}
+
+pub struct Unsubscribed {
+    pub sender: String,
+    pub result: Result<Method, String>,
 }
 
 pub enum Update {
@@ -30,7 +50,7 @@ pub enum Update {
         total: usize,
     },
     Scanned(Scan),
-    Terminated(Terminated),
+    Killed(Killed),
     Undone(Restored),
     Failed(String),
     /// Could not log in; the thread has stopped
@@ -50,7 +70,12 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn spawn(make_store: StoreFactory, journal: Journal, dry_run: bool) -> Self {
+    pub fn spawn(
+        make_store: StoreFactory,
+        mut channels: Box<dyn Channels + Send>,
+        journal: Journal,
+        dry_run: bool,
+    ) -> Self {
         let (job_tx, job_rx) = mpsc::channel::<Job>();
         let (tx, rx) = mpsc::channel::<Update>();
         thread::spawn(move || {
@@ -67,29 +92,21 @@ impl Worker {
             let mut folders: Option<Folders> = None;
             for job in job_rx {
                 let result = match job {
-                    Job::Scan(safety) => scan(store.as_mut(), &safety, &tx).map(|s| {
+                    Job::Scan(safety) => scan(store.as_mut(), &safety, &journal, &tx).map(|s| {
                         folders = Some(s.folders.clone());
                         Update::Scanned(s)
                     }),
-                    Job::Terminate(groups) => match &folders {
-                        Some(f) => {
-                            let mut report = |done, total| {
-                                let _ = tx.send(Update::Progress {
-                                    stage: "Terminating",
-                                    done,
-                                    total,
-                                });
-                            };
-                            ops::terminate(
-                                store.as_mut(),
-                                f,
-                                &groups,
-                                &journal,
-                                dry_run,
-                                &mut report,
-                            )
-                            .map(Update::Terminated)
-                        }
+                    Job::Kill(kill) => match &folders {
+                        Some(f) => run_kill(
+                            store.as_mut(),
+                            channels.as_mut(),
+                            f,
+                            kill,
+                            &journal,
+                            dry_run,
+                            &tx,
+                        )
+                        .map(Update::Killed),
                         None => Err(anyhow::anyhow!("scan the mailbox first")),
                     },
                     Job::Undo(batch) => {
@@ -114,7 +131,12 @@ impl Worker {
     }
 }
 
-fn scan(store: &mut dyn MailStore, safety: &Safety, tx: &Sender<Update>) -> Result<Scan> {
+fn scan(
+    store: &mut dyn MailStore,
+    safety: &Safety,
+    journal: &Journal,
+    tx: &Sender<Update>,
+) -> Result<Scan> {
     let folders = store.folders()?;
 
     let _ = tx.send(Update::Progress {
@@ -138,11 +160,87 @@ fn scan(store: &mut dyn MailStore, safety: &Safety, tx: &Sender<Update>) -> Resu
 
     let count = correspondents.len();
     let rules = SafetyRules::new(safety, correspondents, Utc::now());
-    let groups = group_by_sender(&messages, &rules);
+    let mut groups = group_by_sender(&messages, &rules);
+    let unsubscribed = journal.unsubscribed().unwrap_or_default();
+    for g in &mut groups {
+        g.unsubscribed = unsubscribed.get(&g.address).copied();
+    }
     Ok(Scan {
         folders,
         groups,
         messages: messages.len(),
         correspondents: count,
+    })
+}
+
+/// Unsubscribe first (it needs nothing from the mailbox), then move the mail to Trash
+fn run_kill(
+    store: &mut dyn MailStore,
+    channels: &mut dyn Channels,
+    folders: &Folders,
+    kill: Kill,
+    journal: &Journal,
+    dry_run: bool,
+    tx: &Sender<Update>,
+) -> Result<Killed> {
+    let mut unsubscribed = Vec::new();
+    if kill.unsubscribe {
+        let leaving: Vec<&SenderGroup> = kill
+            .groups
+            .iter()
+            .filter(|g| g.unsubscribed.is_none() && !g.unsubscribe.is_empty())
+            .collect();
+        for (i, g) in leaving.iter().enumerate() {
+            let _ = tx.send(Update::Progress {
+                stage: "Unsubscribing",
+                done: i,
+                total: leaving.len(),
+            });
+            let result = if dry_run {
+                unsubscribe(&g.unsubscribe, &mut Pretend::default())
+            } else {
+                unsubscribe(&g.unsubscribe, channels)
+            };
+            if let (Ok(method), false) = (&result, dry_run) {
+                journal.append(&[Record::Unsubscribed {
+                    sender: g.address.clone(),
+                    at: Utc::now(),
+                    method: format!("{method:?}"),
+                }])?;
+            }
+            unsubscribed.push(Unsubscribed {
+                sender: g.address.clone(),
+                result: result.map_err(|e| format!("{e:#}")),
+            });
+        }
+    }
+
+    let terminated = if kill.trash {
+        let groups: Vec<SenderGroup> = kill
+            .groups
+            .into_iter()
+            .filter(|g| g.protected.is_none() && !g.targets.is_empty())
+            .collect();
+        let mut report = |done, total| {
+            let _ = tx.send(Update::Progress {
+                stage: "Terminating",
+                done,
+                total,
+            });
+        };
+        Some(ops::terminate(
+            store,
+            folders,
+            &groups,
+            journal,
+            dry_run,
+            &mut report,
+        )?)
+    } else {
+        None
+    };
+    Ok(Killed {
+        terminated,
+        unsubscribed,
     })
 }

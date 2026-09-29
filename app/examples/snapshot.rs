@@ -1,16 +1,18 @@
 //! Render the demo board to HTML for screenshots: `cargo run --example snapshot -- 120 36 board > out.html`
-//! Screens: board, confirm, scanning, working, help. Optional 4th argument: animation tick.
+//! Screens: board, confirm, unsubscribe, after, scanning, working, help, setup, setup-form, settings. Optional 4th argument: animation tick.
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent};
 use kill_email::config::Safety;
 use kill_email::mail::{FakeStore, MailStore};
+use kill_email::ops::Terminated;
 use kill_email::safety::SafetyRules;
 use kill_email::senders::group_by_sender;
-use kill_email::tui::app::{App, Progress};
+use kill_email::tui::app::{App, Effect, Progress};
 use kill_email::tui::setup::Setup;
 use kill_email::tui::ui;
-use kill_email::tui::worker::{Scan, Update};
+use kill_email::tui::worker::{Job, Killed, Scan, Unsubscribed, Update};
+use kill_email::unsubscribe::Method;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
@@ -55,6 +57,38 @@ fn main() {
         match screen {
             "confirm" => {
                 app.on_key(KeyEvent::from(KeyCode::Enter));
+            }
+            "unsubscribe" => {
+                app.on_key(KeyEvent::from(KeyCode::Char('n')));
+            }
+            "after" => {
+                app.on_key(KeyEvent::from(KeyCode::Enter));
+                let effects = app.on_key(KeyEvent::from(KeyCode::Char('y')));
+                let Some(Effect::Job(Job::Kill(kill))) = effects.into_iter().next() else {
+                    panic!("expected a kill job");
+                };
+                app.on_update(Update::Killed(Killed {
+                    terminated: Some(Terminated {
+                        batch: "demo".into(),
+                        messages: kill.groups.iter().map(|g| g.targets.len()).sum(),
+                        senders: kill.groups.len(),
+                        trashed: kill
+                            .groups
+                            .iter()
+                            .map(|g| (g.address.clone(), g.targets.len()))
+                            .collect(),
+                        dry_run: false,
+                    }),
+                    unsubscribed: kill
+                        .groups
+                        .iter()
+                        .map(|g| Unsubscribed {
+                            sender: g.address.clone(),
+                            result: Ok(Method::OneClick),
+                        })
+                        .collect(),
+                }));
+                app.table.select(Some(0));
             }
             "help" => {
                 app.on_key(KeyEvent::from(KeyCode::Char('?')));

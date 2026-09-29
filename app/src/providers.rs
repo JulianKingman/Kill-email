@@ -1,6 +1,6 @@
 //! Mail providers the setup screen knows how to connect to.
 
-use crate::config::Security;
+use crate::config::{Security, Smtp};
 
 pub struct Provider {
     pub name: &'static str,
@@ -79,6 +79,34 @@ pub fn security_for(host: &str, port: u16) -> Security {
     }
 }
 
+/// The outgoing server that pairs with an IMAP host. Unknown hosts get the usual
+/// `imap.` to `smtp.` swap; a server on this machine has to be configured by hand.
+pub fn smtp_for(imap_host: &str) -> Option<Smtp> {
+    let host = imap_host.to_ascii_lowercase();
+    let (host, port) = match host.as_str() {
+        "" | "localhost" | "127.0.0.1" | "::1" => return None,
+        "imap.gmail.com" => ("smtp.gmail.com".to_string(), 465),
+        "imap.mail.me.com" => ("smtp.mail.me.com".to_string(), 587),
+        "imap.mail.yahoo.com" => ("smtp.mail.yahoo.com".to_string(), 465),
+        "imap.fastmail.com" => ("smtp.fastmail.com".to_string(), 465),
+        "outlook.office365.com" => ("smtp.office365.com".to_string(), 587),
+        other => match other.strip_prefix("imap.") {
+            Some(rest) => (format!("smtp.{rest}"), 465),
+            None => (other.to_string(), 465),
+        },
+    };
+    let security = if port == 465 {
+        Security::Tls
+    } else {
+        Security::Starttls
+    };
+    Some(Smtp {
+        host,
+        port,
+        security,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +122,17 @@ mod tests {
         assert_eq!(security_for("imap.gmail.com", 993), Security::Tls);
         assert_eq!(security_for("mail.example.org", 143), Security::Starttls);
         assert_eq!(security_for("127.0.0.1", 1143), Security::None);
+    }
+
+    #[test]
+    fn outgoing_servers_pair_with_incoming_ones() {
+        assert_eq!(smtp_for("imap.gmail.com").unwrap().host, "smtp.gmail.com");
+        let icloud = smtp_for("imap.mail.me.com").unwrap();
+        assert_eq!((icloud.port, icloud.security), (587, Security::Starttls));
+        assert_eq!(
+            smtp_for("imap.example.org").unwrap().host,
+            "smtp.example.org"
+        );
+        assert_eq!(smtp_for("127.0.0.1"), None);
     }
 }

@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Cell, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
-use super::app::{App, Mode, Tone};
+use super::app::{App, Mode, Plan, Tone};
 use super::march::{self, March};
 use super::theme::{self, ALIVE, AMBER, ASH, BONE, EMBER, LOGO, MARK, PHOSPHOR, VOID};
 use crate::senders::SenderGroup;
@@ -32,7 +32,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, footer, app);
 
     match &app.mode {
-        Mode::Confirm => draw_confirm(f, area, app),
+        Mode::Confirm(plan) => draw_confirm(f, area, app, *plan),
         Mode::ConfirmUndo(batch) => {
             let text = vec![
                 Line::from(format!(
@@ -221,7 +221,10 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(Line::from(thousands(g.total)).alignment(Alignment::Right)),
                 Cell::from(Line::from(format!("{}%", g.read_pct())).alignment(Alignment::Right)),
                 Cell::from(g.newest.map(ago).unwrap_or_else(|| "—".into())),
-                Cell::from(g.unsubscribe.label()),
+                match g.unsubscribed {
+                    Some(_) => Cell::from(Span::styled("✔ done", Style::new().fg(ALIVE))),
+                    None => Cell::from(g.unsubscribe.label()),
+                },
                 Cell::from(Span::styled(
                     verdict,
                     Style::new().fg(if marked { AMBER } else { color }),
@@ -238,7 +241,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         Constraint::Length(5),
         Constraint::Length(6),
         Constraint::Length(8),
-        Constraint::Length(17),
+        Constraint::Length(19),
     ];
     let title = Line::from(vec![
         Span::styled(" SENDERS ", theme::title()),
@@ -257,10 +260,18 @@ fn verdict(g: &SenderGroup) -> (String, ratatui::style::Color) {
     if g.protected.is_some() {
         return ("PROTECTED".into(), ALIVE);
     }
+    let held = g.held_total();
+    if g.targets.is_empty() && g.trashed > 0 {
+        let kept = if held > 0 {
+            format!(" · {} kept", thousands(held))
+        } else {
+            String::new()
+        };
+        return (format!("✔ {} gone{kept}", thousands(g.trashed)), ASH);
+    }
     if g.targets.is_empty() {
         return ("ALL KEPT".into(), ALIVE);
     }
-    let held = g.held_total();
     if held > 0 {
         (
             format!(
@@ -321,14 +332,22 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(ALIVE),
         )));
         lines.push(Line::from(Span::styled(
-            "Kill Email will not touch this sender.",
+            "Kill Email will not delete this sender's mail.",
             theme::muted(),
         )));
     } else {
-        lines.push(Line::from(Span::styled(
-            format!("{} would go to Trash", thousands(g.targets.len())),
-            Style::new().fg(PHOSPHOR).bold(),
-        )));
+        if g.trashed > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("{} moved to Trash", thousands(g.trashed)),
+                Style::new().fg(ASH).bold(),
+            )));
+        }
+        if !g.targets.is_empty() || g.trashed == 0 {
+            lines.push(Line::from(Span::styled(
+                format!("{} would go to Trash", thousands(g.targets.len())),
+                Style::new().fg(PHOSPHOR).bold(),
+            )));
+        }
         for (hold, n) in &g.held {
             lines.push(Line::from(Span::styled(
                 format!("  kept {n}: {}", hold.label()),
@@ -336,12 +355,54 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             )));
         }
     }
-    f.render_widget(
-        Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    if let Some(at) = g.unsubscribed {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "Unsubscribed {}",
+                at.with_timezone(&chrono::Local).format("%b %-d")
+            ),
+            Style::new().fg(ALIVE),
+        )));
+    }
+
+    // What they actually send, newest first
+    if !g.samples.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("RECENT MAIL", theme::title())));
+        let width = usize::from(area.width.saturating_sub(2));
+        for sample in &g.samples {
+            let date = sample
+                .date
+                .map(|d| d.with_timezone(&chrono::Local).format("%b %e").to_string())
+                .unwrap_or_else(|| "      ".into());
+            let subject = if sample.subject.trim().is_empty() {
+                "(no subject)"
+            } else {
+                sample.subject.trim()
+            };
+            let room = width.saturating_sub(date.chars().count() + 3);
+            let dot = if sample.seen { "  " } else { "• " };
+            lines.push(Line::from(vec![
+                Span::styled(dot, Style::new().fg(AMBER)),
+                Span::styled(format!("{date} "), theme::muted()),
+                Span::styled(
+                    truncate(subject, room),
+                    Style::new().fg(if sample.seen { ASH } else { BONE }),
+                ),
+            ]));
+        }
+    }
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Cut to `width` columns with an ellipsis
+fn truncate(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(width.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -383,6 +444,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             ("↑↓", "move"),
             ("space", "mark"),
             ("enter", "terminate"),
+            ("n", "unsubscribe"),
             ("u", "undo"),
             ("s", "sort"),
             ("r", "rescan"),
@@ -405,55 +467,121 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), keys);
 }
 
-fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
-    let (senders, messages, bytes) = app.chosen_totals();
-    let names: Vec<String> = app
-        .chosen()
-        .iter()
-        .take(4)
-        .map(|g| g.display_name().to_string())
-        .collect();
-    let more = senders.saturating_sub(names.len());
+fn draw_confirm(f: &mut Frame, area: Rect, app: &App, plan: Plan) {
+    let targets = app.targets_for(plan);
+    let leavers = app.leavers(plan);
+    let (_, messages, bytes) = app.chosen_totals();
+    let senders = targets.len();
+    let s = |n: usize| if n == 1 { "" } else { "s" };
+
+    let title = if plan.trash {
+        format!(
+            "Terminate {} messages from {senders} sender{}?",
+            thousands(messages),
+            s(senders)
+        )
+    } else {
+        format!(
+            "Unsubscribe from {} sender{}?",
+            leavers.len(),
+            s(leavers.len())
+        )
+    };
     let mut text = vec![
-        Line::from(Span::styled(
-            format!(
-                "Terminate {} messages from {} sender{}?",
-                thousands(messages),
-                senders,
-                if senders == 1 { "" } else { "s" }
-            ),
-            Style::new().fg(BONE).bold(),
-        )),
+        Line::from(Span::styled(title, Style::new().fg(BONE).bold())),
         Line::from(""),
     ];
-    for n in names {
-        text.push(Line::from(format!("  ✖ {n}")).style(Style::new().fg(PHOSPHOR)));
+    let shown: Vec<&&SenderGroup> = if plan.trash {
+        targets.iter().take(4).collect()
+    } else {
+        leavers.iter().take(4).collect()
+    };
+    let listed = if plan.trash { senders } else { leavers.len() };
+    for g in &shown {
+        text.push(Line::from(format!("  ✖ {}", g.display_name())).style(Style::new().fg(PHOSPHOR)));
     }
-    if more > 0 {
-        text.push(Line::from(format!("  and {more} more")).style(theme::muted()));
+    if listed > shown.len() {
+        text.push(Line::from(format!("  and {} more", listed - shown.len())).style(theme::muted()));
     }
     text.push(Line::from(""));
-    if app.dry_run {
-        text.push(Line::from("Dry run: nothing will be moved.").style(Style::new().fg(AMBER)));
+
+    if plan.trash {
+        if leavers.is_empty() {
+            text.push(
+                Line::from("No way to unsubscribe from these senders.").style(theme::muted()),
+            );
+        } else {
+            let (mark, color) = if plan.unsubscribe {
+                ("[x]", AMBER)
+            } else {
+                ("[ ]", ASH)
+            };
+            text.push(Line::from(vec![
+                Span::styled(format!("{mark} "), Style::new().fg(color).bold()),
+                Span::styled(
+                    format!("Unsubscribe from {} of them too", leavers.len()),
+                    Style::new().fg(color),
+                ),
+                Span::styled("   t toggles", theme::key()),
+            ]));
+        }
+    }
+    if plan.unsubscribe && !leavers.is_empty() {
+        let mut click = 0;
+        let mut email = 0;
+        let mut page = 0;
+        for g in &leavers {
+            match g.unsubscribe.label() {
+                "1-click" => click += 1,
+                "mailto" if app.config.account.smtp_server().is_some() || app.demo => email += 1,
+                _ if g.unsubscribe.https.is_some() => page += 1,
+                _ => email += 1,
+            }
+        }
+        let mut how = Vec::new();
+        if click > 0 {
+            how.push(format!("{click} by one click"));
+        }
+        if email > 0 {
+            how.push(format!("{email} by email from your account"));
+        }
+        if page > 0 {
+            how.push(format!("{page} open in your browser to finish"));
+        }
+        let indent = if plan.trash { "    " } else { "" };
+        text.push(Line::from(format!("{indent}{}", how.join(", "))).style(theme::muted()));
+    }
+    if plan.trash {
+        text.push(Line::from(""));
+        if app.dry_run {
+            text.push(
+                Line::from("Dry run: nothing will be moved or sent.").style(Style::new().fg(AMBER)),
+            );
+        } else {
+            text.push(
+                Line::from(format!(
+                    "Frees about {}. Mail goes to Trash; press u, or run",
+                    megabytes(bytes)
+                ))
+                .style(theme::muted()),
+            );
+            text.push(Line::from("`kill-email undo`, to put it back.").style(theme::muted()));
+        }
+    } else if app.dry_run {
+        text.push(Line::from("Dry run: nothing will be sent.").style(Style::new().fg(AMBER)));
     } else {
+        text.push(Line::from(""));
         text.push(
-            Line::from(format!(
-                "Frees about {}. Everything goes to Trash;",
-                megabytes(bytes)
-            ))
-            .style(theme::muted()),
-        );
-        text.push(
-            Line::from("press u, or run `kill-email undo`, to put it back.").style(theme::muted()),
+            Line::from("Their mail stays where it is. Unsubscribing can't be undone.")
+                .style(theme::muted()),
         );
     }
-    modal(
-        f,
-        area,
-        " CONFIRM TERMINATION ",
-        text,
-        "y execute   n cancel",
-    );
+    let heading = if plan.trash {
+        " CONFIRM TERMINATION "
+    } else {
+        " CONFIRM UNSUBSCRIBE "
+    };
+    modal(f, area, heading, text, "y execute   n cancel");
 }
 
 fn draw_working(f: &mut Frame, area: Rect, app: &App) {
@@ -485,6 +613,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
         (
             "enter / d",
             "terminate marked senders (or the highlighted one)",
+        ),
+        (
+            "n",
+            "unsubscribe from marked senders (or the highlighted one)",
         ),
         ("u", "undo the last termination"),
         ("s", "sort: most mail, least read, oldest"),

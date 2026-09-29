@@ -27,6 +27,25 @@ pub struct Account {
     pub trash: Option<String>,
     /// Overrides the folder the server marks as \Sent
     pub sent: Option<String>,
+    /// Outgoing server for unsubscribe emails; worked out from `host` when unset
+    pub smtp: Option<Smtp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Smtp {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub security: Security,
+}
+
+impl Account {
+    /// Where unsubscribe emails go out from, if there is anywhere
+    pub fn smtp_server(&self) -> Option<Smtp> {
+        self.smtp
+            .clone()
+            .or_else(|| crate::providers::smtp_for(&self.host))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +155,7 @@ impl Config {
                 inbox: default_inbox(),
                 trash: None,
                 sent: None,
+                smtp: None,
             },
             safety: Safety::default(),
         }

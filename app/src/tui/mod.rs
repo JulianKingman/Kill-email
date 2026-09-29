@@ -31,10 +31,12 @@ pub struct Runtime {
 
 /// A mail connection for a real account, opened on the worker thread
 pub fn imap_worker(account: crate::config::Account, password: String, rt: &Runtime) -> Worker {
+    let channels = Box::new(crate::unsubscribe::Live::new(&account, &password));
     Worker::spawn(
         Box::new(move || {
             Ok(Box::new(ImapStore::connect(&account, &password)?) as Box<dyn MailStore>)
         }),
+        channels,
         rt.journal.clone(),
         rt.dry_run,
     )

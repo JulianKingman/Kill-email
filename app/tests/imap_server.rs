@@ -27,6 +27,7 @@ fn server() -> Option<(Account, String)> {
         inbox: "INBOX".into(),
         trash: None,
         sent: None,
+        smtp: None,
     };
     Some((account, pass.into()))
 }

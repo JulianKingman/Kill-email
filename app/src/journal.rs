@@ -1,6 +1,6 @@
 //! Append-only record of every message moved, so any batch can be put back.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +13,16 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Record {
     Moved(Moved),
-    Undone { batch: String, at: DateTime<Utc> },
+    Undone {
+        batch: String,
+        at: DateTime<Utc>,
+    },
+    /// Not undoable, but remembered so the sender shows as dealt with
+    Unsubscribed {
+        sender: String,
+        at: DateTime<Utc>,
+        method: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,10 +128,22 @@ impl Journal {
                         b.undone = true;
                     }
                 }
+                Record::Unsubscribed { .. } => {}
             }
         }
         let mut out: Vec<Batch> = map.into_values().collect();
         out.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
+        Ok(out)
+    }
+
+    /// When you unsubscribed from each sender
+    pub fn unsubscribed(&self) -> Result<HashMap<String, DateTime<Utc>>> {
+        let mut out = HashMap::new();
+        for r in self.records()? {
+            if let Record::Unsubscribed { sender, at, .. } = r {
+                out.insert(sender, at);
+            }
+        }
         Ok(out)
     }
 

@@ -25,7 +25,24 @@ pub struct SenderGroup {
     pub targets: Vec<Target>,
     /// Messages kept despite targeting the sender, by reason
     pub held: BTreeMap<Hold, usize>,
+    /// The newest few messages, so you can see what this sender sends
+    pub samples: Vec<Sample>,
+    /// Messages moved to Trash since the last scan
+    pub trashed: usize,
+    /// Set once you've unsubscribed from this sender
+    pub unsubscribed: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sample {
+    pub uid: u32,
+    pub subject: String,
+    pub date: Option<DateTime<Utc>>,
+    pub seen: bool,
+}
+
+/// How many recent messages each sender keeps for the detail pane
+pub const SAMPLES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -72,6 +89,9 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
             protected: rules.sender_hold(key),
             targets: Vec::new(),
             held: BTreeMap::new(),
+            samples: Vec::new(),
+            trashed: 0,
+            unsubscribed: None,
         });
 
         g.total += 1;
@@ -89,6 +109,16 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
             g.oldest = Some(g.oldest.map_or(d, |o| o.min(d)));
         }
 
+        g.samples.push(Sample {
+            uid: m.uid,
+            subject: m.subject.clone(),
+            date: m.date,
+            seen: m.seen,
+        });
+        if g.samples.len() > SAMPLES * 4 {
+            trim_samples(&mut g.samples);
+        }
+
         if g.protected.is_some() {
             continue;
         }
@@ -103,12 +133,21 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
     }
 
     let mut out: Vec<SenderGroup> = groups.into_values().collect();
+    for g in &mut out {
+        trim_samples(&mut g.samples);
+    }
     out.sort_by(|a, b| {
         b.total
             .cmp(&a.total)
             .then_with(|| a.address.cmp(&b.address))
     });
     out
+}
+
+/// Keep only the newest samples, newest first
+fn trim_samples(samples: &mut Vec<Sample>) {
+    samples.sort_by_key(|s| std::cmp::Reverse(s.date));
+    samples.truncate(SAMPLES);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +206,10 @@ mod tests {
         assert_eq!(groups[0].address, "notify@socialnet.example");
         assert_eq!(groups[0].total, 214);
         assert_eq!(groups[0].unsubscribe.label(), "1-click");
+        let samples = &groups[0].samples;
+        assert_eq!(samples.len(), SAMPLES);
+        assert!(samples.windows(2).all(|w| w[0].date >= w[1].date));
+        assert!(!samples[0].subject.is_empty());
 
         let mom = groups
             .iter()

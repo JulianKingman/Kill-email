@@ -29,6 +29,10 @@ jobs:
           sudo useradd -r -M -s /usr/sbin/nologin kmail || true
           sudo mkdir -p /var/tmp/kedc-mail /run/kedc && sudo chown kmail:kmail /var/tmp/kedc-mail
           sudo dovecot -c tests/fixtures/dovecot-test.conf
+      - name: Start an SMTP sink for the unsubscribe email test
+        run: nohup python3 tests/fixtures/smtp_sink.py 2525 /tmp/smtp-sink.txt > /dev/null 2>&1 &
       - run: cargo test
         env:
           KILL_EMAIL_TEST_IMAP: 127.0.0.1:1143:tester:testpass
+          KILL_EMAIL_TEST_SMTP: 127.0.0.1:2525
+          KILL_EMAIL_TEST_SMTP_LOG: /tmp/smtp-sink.txt
