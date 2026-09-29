@@ -22,8 +22,8 @@
 
 ## Features
 
-- **AI-Powered Categorization**: Uses Claude to intelligently categorize emails
-- **Smart Escalation**: Uncertain emails are escalated to smarter models for better accuracy
+- **AI-Powered Categorization**: Uses Claude, or a decision model such as Jev or Laya, to categorize emails
+- **Smart Escalation**: Uncertain emails are escalated to a stronger Claude model for better accuracy
 - **Multi-Tier Organization**: Archives (receipts, personal, work, legal, travel, newsletters), keeps, and terminates
 - **Retro Terminal UI**: 80s-inspired visuals with scanlines, glitch effects, and vector graphics
 - **Tunable "Knobs"**: Configure aggressiveness, confidence thresholds, and more
@@ -73,11 +73,45 @@ Supports Gmail, Outlook, Yahoo, and custom IMAP servers.
 
 Get your Anthropic API key from [console.anthropic.com](https://console.anthropic.com)
 
+### Classifiers
+
+Emails go through three tiers. Each tier only sees what the one before could not settle:
+
+1. **Rules**: blocked and trusted domains, receipt keywords, old promotions
+2. **First-pass classifier**: Claude (`claude-haiku-4-5`) by default, or a *system-one* decision model
+3. **Escalation**: low-confidence answers go to `claude-opus-5-5`, then to you
+
+A system-one model returns a category and calibrated probabilities instead of generating text, so it is much faster and cheaper per email. Two servers speak the same `/v1/systemone` API:
+
+- **Jev** (hosted, by TypeSafe AI): set `SYSTEMONE_BASE_URL` to your Jev endpoint and `SYSTEMONE_API_KEY` to your key.
+- **Laya** (open source, runs on your machine, so email never leaves it):
+
+  ```bash
+  pip install "laya[serve]"
+  LAYA_API_KEY=pick-a-token laya-serve   # listens on http://localhost:8000
+  ```
+
+Then run with the system-one classifier:
+
+```bash
+export KILL_EMAIL_CLASSIFIER=system-one
+export SYSTEMONE_API_KEY=pick-a-token      # the same token given to the server
+npm start
+```
+
+Without an Anthropic API key, the system-one answer is final: low-confidence deletions are delayed instead of escalated, and review questions fall back to generic ones.
+
 ### Environment Variables
+
+Environment variables apply to the current run and are never written to the config file.
 
 ```bash
 export ANTHROPIC_API_KEY="sk-..."
-export KILL_EMAIL_THEME="terminator"  # or: matrix, amber, green
+export KILL_EMAIL_CLASSIFIER="system-one"  # or: claude (default)
+export SYSTEMONE_BASE_URL="http://localhost:8000"
+export SYSTEMONE_API_KEY="..."
+export SYSTEMONE_MODEL="..."               # optional model name for the server
+export KILL_EMAIL_THEME="terminator"       # or: matrix, amber, green
 ```
 
 ## Categories
@@ -102,6 +136,8 @@ export KILL_EMAIL_THEME="terminator"  # or: matrix, amber, green
 ### Escalation
 - `ESCALATE` - Needs smarter AI analysis
 - `HUMAN_REVIEW` - Requires human decision
+
+Classifiers only choose from the delete, archive and keep categories. `TERMINATE_DELAYED`, `ESCALATE` and `HUMAN_REVIEW` are set by the policy (`src/policy.ts`) based on your knobs and the classifier's confidence.
 
 ## Presets
 
@@ -155,20 +191,31 @@ kill-email --limit 100  # Limit emails to process
 src/
 ├── index.ts          # Main entry point
 ├── engine.ts         # Processing pipeline
+├── policy.ts         # Rules and knobs: classification → fate
 ├── types.ts          # Type definitions
+├── classify/
+│   ├── types.ts          # Classifier interface
+│   ├── categories.ts     # Categories a classifier can choose
+│   ├── claude.ts         # Claude (structured outputs)
+│   └── system-one.ts     # Jev / Laya (/v1/systemone)
 ├── config/
 │   ├── defaults.ts   # Default configurations
 │   └── manager.ts    # Configuration management
 ├── email/
 │   ├── imap-client.ts    # IMAP connection
 │   └── organizer.ts      # Email organization
-├── llm/
-│   └── categorizer.ts    # AI categorization
 └── ui/
     ├── theme.ts      # Visual themes
     ├── effects.ts    # Visual effects
     ├── renderer.ts   # Terminal rendering
     └── prompts.ts    # Interactive prompts
+```
+
+## Development
+
+```bash
+npm run build   # compile to dist/
+npm test        # compile and run the unit tests (node:test)
 ```
 
 ## License

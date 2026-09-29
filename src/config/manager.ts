@@ -8,11 +8,13 @@ import {
   KillEmailConfig,
   EmailConnectionConfig,
   SmartKnobs,
+  ClassifierConfig,
 } from '../types';
 import {
   DEFAULT_CONFIG,
   DEFAULT_SMART_KNOBS,
   PRESETS,
+  RETIRED_MODELS,
 } from './defaults';
 
 const CONFIG_SCHEMA = {
@@ -40,7 +42,32 @@ const CONFIG_SCHEMA = {
     type: 'object',
     default: DEFAULT_SMART_KNOBS,
   },
+  classifier: {
+    type: 'object',
+    default: DEFAULT_CONFIG.classifier,
+  },
 } as const;
+
+// Settings read from the environment for this run only; secrets never get written to disk
+function applyEnvOverrides(config: KillEmailConfig): KillEmailConfig {
+  const env = process.env;
+  const classifier: ClassifierConfig = {
+    ...config.classifier,
+    systemOne: { ...config.classifier.systemOne },
+  };
+
+  const primary = env.KILL_EMAIL_CLASSIFIER;
+  if (primary === 'claude' || primary === 'system-one') classifier.primary = primary;
+  if (env.SYSTEMONE_BASE_URL) classifier.systemOne.baseUrl = env.SYSTEMONE_BASE_URL;
+  if (env.SYSTEMONE_API_KEY) classifier.systemOne.apiKey = env.SYSTEMONE_API_KEY;
+  if (env.SYSTEMONE_MODEL) classifier.systemOne.model = env.SYSTEMONE_MODEL;
+
+  return {
+    ...config,
+    llm: env.ANTHROPIC_API_KEY ? { ...config.llm, apiKey: env.ANTHROPIC_API_KEY } : config.llm,
+    classifier,
+  };
+}
 
 export class ConfigManager {
   private config: Conf<any>;
@@ -50,16 +77,31 @@ export class ConfigManager {
       projectName: 'kill-all-email',
       schema: CONFIG_SCHEMA as any,
     });
+    this.migrateRetiredModels();
+  }
+
+  // Earlier versions saved model IDs that have since been retired
+  private migrateRetiredModels(): void {
+    const llm = this.config.get('llm');
+    const fastModel = RETIRED_MODELS[llm.fastModel] ?? llm.fastModel;
+    const smartModel = RETIRED_MODELS[llm.smartModel] ?? llm.smartModel;
+    const { temperature: _unused, ...rest } = llm;
+    if (fastModel !== llm.fastModel || smartModel !== llm.smartModel || 'temperature' in llm) {
+      this.config.set('llm', { ...rest, fastModel, smartModel });
+    }
   }
 
   // Get full configuration
   getConfig(): KillEmailConfig & { knobs: SmartKnobs } {
     return {
-      email: this.config.get('email') as EmailConnectionConfig,
-      llm: this.config.get('llm'),
-      processing: this.config.get('processing'),
-      categories: this.config.get('categories'),
-      ui: this.config.get('ui'),
+      ...applyEnvOverrides({
+        email: this.config.get('email') as EmailConnectionConfig,
+        llm: this.config.get('llm'),
+        processing: this.config.get('processing'),
+        categories: this.config.get('categories'),
+        ui: this.config.get('ui'),
+        classifier: this.config.get('classifier'),
+      }),
       knobs: this.config.get('knobs'),
     };
   }
@@ -108,35 +150,32 @@ export class ConfigManager {
 
   // Check if configured
   isConfigured(): boolean {
-    const email = this.config.get('email') as EmailConnectionConfig | undefined;
-    const llm = this.config.get('llm');
-
-    return !!(
-      email?.auth?.user &&
-      (email?.auth?.password || email?.auth?.accessToken) &&
-      llm?.apiKey
-    );
+    return this.getConfigStatus().ready;
   }
 
   // Get configuration status
   getConfigStatus(): {
     emailConfigured: boolean;
     llmConfigured: boolean;
+    classifierConfigured: boolean;
     ready: boolean;
   } {
-    const email = this.config.get('email') as EmailConnectionConfig | undefined;
-    const llm = this.config.get('llm');
+    const { email, llm, classifier } = this.getConfig();
 
     const emailConfigured = !!(
       email?.auth?.user &&
       (email?.auth?.password || email?.auth?.accessToken)
     );
     const llmConfigured = !!llm?.apiKey;
+    // Claude needs an API key; a system-one server needs an address
+    const classifierConfigured =
+      classifier.primary === 'system-one' ? !!classifier.systemOne.baseUrl : llmConfigured;
 
     return {
       emailConfigured,
       llmConfigured,
-      ready: emailConfigured && llmConfigured,
+      classifierConfigured,
+      ready: emailConfigured && classifierConfigured,
     };
   }
 
@@ -158,6 +197,13 @@ export class ConfigManager {
       llm: {
         ...config.llm,
         apiKey: config.llm?.apiKey ? '***configured***' : undefined,
+      },
+      classifier: {
+        ...config.classifier,
+        systemOne: {
+          ...config.classifier.systemOne,
+          apiKey: config.classifier.systemOne.apiKey ? '***configured***' : undefined,
+        },
       },
     };
   }

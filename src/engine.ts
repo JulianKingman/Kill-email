@@ -6,7 +6,8 @@
 import { EventEmitter } from 'events';
 import { ImapClient } from './email/imap-client';
 import { EmailOrganizer } from './email/organizer';
-import { EmailCategorizer } from './llm/categorizer';
+import { createClassifiers, Classification, Classifier, ClaudeClassifier } from './classify';
+import { applyRules, decideFate, toDecision } from './policy';
 import { getRenderer, TerminalRenderer } from './ui/renderer';
 import { getEffects } from './ui/effects';
 import {
@@ -26,6 +27,7 @@ export interface EngineEvents {
   'email-processed': (email: EmailMessage, decision: CategoryDecision) => void;
   'batch-complete': (stats: Partial<ProcessingStats>) => void;
   'escalation': (emails: EmailMessage[]) => void;
+  'classification-failed': (email: EmailMessage, classifier: string, error: string) => void;
   'error': (error: Error) => void;
   'complete': (stats: ProcessingStats) => void;
 }
@@ -44,7 +46,8 @@ export class TerminationEngine extends EventEmitter {
   private config: KillEmailConfig;
   private knobs: SmartKnobs;
   private client: ImapClient | null = null;
-  private categorizer: EmailCategorizer;
+  private primary: Classifier;
+  private escalation: ClaudeClassifier | null;
   private organizer: EmailOrganizer | null = null;
   private renderer: TerminalRenderer;
   private state: SessionState;
@@ -53,11 +56,9 @@ export class TerminationEngine extends EventEmitter {
     super();
     this.config = config;
     this.knobs = knobs;
-    this.categorizer = new EmailCategorizer(
-      config.llm,
-      knobs,
-      config.processing
-    );
+    const tiers = createClassifiers(config, knobs);
+    this.primary = tiers.primary;
+    this.escalation = tiers.escalation;
     this.renderer = getRenderer(config.ui.theme);
     this.state = this.initializeState();
   }
@@ -105,8 +106,9 @@ export class TerminationEngine extends EventEmitter {
       const { decisions, escalated, humanReview } = await this.categorizePhase(emails);
 
       // Phase 4: Escalate (if needed)
-      const escalatedDecisions = await this.escalatePhase(escalated);
-      decisions.push(...escalatedDecisions);
+      const escalatedResult = await this.escalatePhase(escalated);
+      decisions.push(...escalatedResult.decisions);
+      humanReview.push(...escalatedResult.humanReview);
 
       // Phase 5: Human Review (if needed)
       if (humanReview.length > 0 && onHumanReview) {
@@ -184,40 +186,57 @@ export class TerminationEngine extends EventEmitter {
     this.setPhase(ProcessingPhase.CATEGORIZING);
     this.renderer.showPhaseHeader(ProcessingPhase.CATEGORIZING);
 
-    // First, apply quick rules
-    const { obvious, needsLLM } = this.categorizer.preFilterEmails(emails);
-
-    this.renderer.showInfo(
-      `Quick filter: ${obvious.length} obvious, ${needsLLM.length} need AI analysis`
-    );
-
-    const decisions: CategoryDecision[] = [...obvious];
+    const decisions: CategoryDecision[] = [];
     const escalated: EmailMessage[] = [];
     const humanReview: EmailMessage[] = [];
+    const needsModel: EmailMessage[] = [];
+    const policy = {
+      knobs: this.knobs,
+      escalationThreshold: this.config.llm.escalationThreshold,
+    };
 
-    // Process through LLM
-    if (needsLLM.length > 0) {
-      this.renderer.startSpinner('Analyzing emails with AI...');
+    // First, apply the user's rules
+    for (const email of emails) {
+      const hit = applyRules(email, this.config.processing, this.knobs);
+      if (!hit) {
+        needsModel.push(email);
+        continue;
+      }
+      const fate = hit.explicit
+        ? hit.classification.category
+        : decideFate(email, hit.classification, { ...policy, finalTier: true });
+      this.route(email, hit.classification, fate, decisions, escalated, humanReview);
+    }
 
-      const result = await this.categorizer.categorizeBatch(needsLLM, false);
+    this.renderer.showInfo(
+      `Rules: ${emails.length - needsModel.length} matched, ${needsModel.length} need ${this.primary.name}`
+    );
 
-      for (const decision of result.decisions) {
-        if (decision.fate === EmailFate.HUMAN_REVIEW) {
-          const email = emails.find((e) => e.id === decision.emailId);
-          if (email) humanReview.push(email);
-        } else {
-          decisions.push(decision);
-        }
+    if (needsModel.length > 0) {
+      this.renderer.startSpinner(`Classifying with ${this.primary.name}...`);
 
-        this.state.stats.processed++;
-        this.emit('email-processed', emails.find((e) => e.id === decision.emailId)!, decision);
+      const result = await this.primary.classify(needsModel);
+      const byId = new Map(needsModel.map((e) => [e.id, e]));
+
+      for (const classification of result.classifications) {
+        const email = byId.get(classification.emailId);
+        if (!email) continue;
+        const fate = decideFate(email, classification, { ...policy, finalTier: !this.escalation });
+        this.route(email, classification, fate, decisions, escalated, humanReview);
       }
 
-      escalated.push(...result.escalated);
-      this.state.stats.escalated = escalated.length;
+      // Never drop an email because its request failed: a stronger model or a person decides
+      for (const failure of result.failed) {
+        const email = byId.get(failure.emailId);
+        if (!email) continue;
+        this.reportFailure(email, this.primary.name, failure.error);
+        (this.escalation ? escalated : humanReview).push(email);
+      }
 
+      this.state.stats.escalated = escalated.length;
+      const failedNote = result.failed.length > 0 ? `, ${result.failed.length} failed` : '';
       this.renderer.spinnerSuccess(
-        `Analyzed ${result.decisions.length} emails, ${escalated.length} escalated`
+        `Classified ${result.classifications.length} emails, ${escalated.length} escalated${failedNote}`
       );
     }
 
@@ -227,22 +246,99 @@ export class TerminationEngine extends EventEmitter {
     return { decisions, escalated, humanReview };
   }
 
-  // Phase 4: Escalate uncertain emails to smarter model
-  private async escalatePhase(escalated: EmailMessage[]): Promise<CategoryDecision[]> {
-    if (escalated.length === 0) {
-      return [];
+  private reportFailure(email: EmailMessage, classifier: string, error: string): void {
+    this.renderer.showWarning(`${classifier} could not classify "${email.subject}": ${error}`);
+    this.emit('classification-failed', email, classifier, error);
+  }
+
+  // Sort one classified email into the right bucket
+  private route(
+    email: EmailMessage,
+    classification: Classification,
+    fate: EmailFate,
+    decisions: CategoryDecision[],
+    escalated: EmailMessage[],
+    humanReview: EmailMessage[]
+  ): void {
+    if (fate === EmailFate.ESCALATE) {
+      escalated.push(email);
+      return;
+    }
+    if (fate === EmailFate.HUMAN_REVIEW) {
+      humanReview.push(email);
+      return;
+    }
+    const decision = toDecision(classification, fate);
+    decisions.push(decision);
+    this.state.stats.processed++;
+    this.emit('email-processed', email, decision);
+  }
+
+  // Phase 4: Escalate uncertain emails to a stronger model
+  private async escalatePhase(
+    escalated: EmailMessage[]
+  ): Promise<{ decisions: CategoryDecision[]; humanReview: EmailMessage[] }> {
+    const decisions: CategoryDecision[] = [];
+    const humanReview: EmailMessage[] = [];
+
+    if (escalated.length === 0 || !this.escalation) {
+      return { decisions, humanReview };
     }
 
     this.setPhase(ProcessingPhase.ESCALATING);
     this.renderer.showPhaseHeader(ProcessingPhase.ESCALATING);
     this.renderer.showInfo(`${escalated.length} emails require deeper analysis`);
-    this.renderer.startSpinner('Engaging smart model...');
+    this.renderer.startSpinner(`Engaging ${this.escalation.name}...`);
 
-    const result = await this.categorizer.categorizeBatch(escalated, true);
+    const result = await this.escalation.classify(escalated);
+    const byId = new Map(escalated.map((e) => [e.id, e]));
 
-    this.renderer.spinnerSuccess(`Smart model analyzed ${result.decisions.length} emails`);
+    for (const classification of result.classifications) {
+      const email = byId.get(classification.emailId);
+      if (!email) continue;
+      const fate = decideFate(email, classification, {
+        knobs: this.knobs,
+        escalationThreshold: this.config.llm.escalationThreshold,
+        finalTier: true,
+      });
+      if (fate === EmailFate.HUMAN_REVIEW) {
+        humanReview.push(email);
+        continue;
+      }
+      const decision = toDecision(classification, fate, EmailFate.ESCALATE);
+      decisions.push(decision);
+      this.state.stats.processed++;
+      this.emit('email-processed', email, decision);
+    }
 
-    return result.decisions;
+    for (const failure of result.failed) {
+      const email = byId.get(failure.emailId);
+      if (!email) continue;
+      this.reportFailure(email, this.escalation.name, failure.error);
+      humanReview.push(email);
+    }
+
+    this.renderer.spinnerSuccess(
+      `${this.escalation.name} decided ${decisions.length}, ${humanReview.length} need a human`
+    );
+
+    return { decisions, humanReview };
+  }
+
+  // Questions shown during human review; the decision models write no text, so ask Claude
+  async reviewQuestions(email: EmailMessage): Promise<string[]> {
+    const fallback = [
+      'Is this email important for future reference?',
+      'Would you miss this if it were deleted?',
+      'Does this contain information you might need later?',
+    ];
+    if (!this.escalation) return fallback;
+    try {
+      const questions = await this.escalation.reviewQuestions(email);
+      return questions.length > 0 ? questions : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   // Phase 5: Human review

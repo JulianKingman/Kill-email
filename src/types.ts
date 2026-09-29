@@ -65,7 +65,7 @@ export interface CategoryDecision {
   fate: EmailFate;
   confidence: number;        // 0-1, how confident the model is
   reasoning: string;         // Why this decision was made
-  modelUsed: 'fast' | 'smart' | 'human';
+  modelUsed: string;         // Which rule or classifier made the call (e.g. 'rules', 'system-one', a Claude model, 'human')
   suggestedLabel?: string;
   escalatedFrom?: EmailFate; // If this was escalated
   timestamp: Date;
@@ -90,6 +90,22 @@ export interface KillEmailConfig {
   processing: ProcessingConfig;
   categories: CategoryConfig;
   ui: UIConfig;
+  classifier: ClassifierConfig;
+}
+
+// Which model does the first-pass categorization. Claude always handles escalations.
+export interface ClassifierConfig {
+  primary: 'claude' | 'system-one';
+  systemOne: SystemOneConfig;
+}
+
+// Any server speaking the /v1/systemone decision API: TypeSafe's hosted Jev, or a local `laya-serve`
+export interface SystemOneConfig {
+  baseUrl: string;
+  apiKey?: string;
+  model?: string;
+  concurrency: number;
+  timeoutMs: number;
 }
 
 export interface EmailConnectionConfig {
@@ -120,7 +136,6 @@ export interface LLMConfig {
   escalationThreshold: number; // Confidence below this → escalate
   batchSize: number;         // Emails per API call
   maxTokensPerEmail: number;
-  temperature: number;
 }
 
 export interface ProcessingConfig {
