@@ -33,8 +33,16 @@ fn server() -> Option<(Account, String)> {
 
 fn seed(account: &Account, password: &str) {
     let status = std::process::Command::new("python3")
-        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/seed_imap.py"))
-        .args([&account.host, &account.port.to_string(), &account.username, password])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/seed_imap.py"
+        ))
+        .args([
+            &account.host,
+            &account.port.to_string(),
+            &account.username,
+            password,
+        ])
         .status()
         .expect("python3 is needed to seed the test server");
     assert!(status.success(), "seeding failed");
@@ -54,17 +62,24 @@ fn scan_terminate_and_undo_on_a_real_server() {
     assert_eq!(folders.sent.as_deref(), Some("Sent"));
 
     let mut calls = 0;
-    let msgs = store.scan(&folders.inbox, 0, &mut |_, _| calls += 1).expect("scan");
+    let msgs = store
+        .scan(&folders.inbox, 0, &mut |_, _| calls += 1)
+        .expect("scan");
     assert_eq!(msgs.len(), 65);
     assert!(calls >= 2, "progress is reported");
 
-    let sent = store.sent_recipients(folders.sent.as_deref().unwrap(), 100).expect("sent");
+    let sent = store
+        .sent_recipients(folders.sent.as_deref().unwrap(), 100)
+        .expect("sent");
     assert!(sent.contains("mom@family.test"));
 
     let rules = SafetyRules::new(&Safety::default(), sent, Utc::now());
     let groups = group_by_sender(&msgs, &rules);
 
-    let shop = groups.iter().find(|g| g.address == "deals@shopmart.test").unwrap();
+    let shop = groups
+        .iter()
+        .find(|g| g.address == "deals@shopmart.test")
+        .unwrap();
     assert_eq!(shop.total, 30);
     assert_eq!(shop.unsubscribe.label(), "1-click");
     assert_eq!(shop.held.get(&Hold::Flagged), Some(&1));
@@ -73,15 +88,24 @@ fn scan_terminate_and_undo_on_a_real_server() {
     assert_eq!(shop.held.get(&Hold::Unrestorable), Some(&1));
     assert_eq!(shop.targets.len(), 26);
 
-    let brief = groups.iter().find(|g| g.address == "digest@dailybrief.test").unwrap();
+    let brief = groups
+        .iter()
+        .find(|g| g.address == "digest@dailybrief.test")
+        .unwrap();
     assert_eq!(brief.unsubscribe.label(), "mailto");
     assert_eq!(brief.held.get(&Hold::Answered), Some(&1));
 
-    let social = groups.iter().find(|g| g.address == "notify@socialnet.test").unwrap();
+    let social = groups
+        .iter()
+        .find(|g| g.address == "notify@socialnet.test")
+        .unwrap();
     assert!(social.bulk);
     assert_eq!(social.unsubscribe.label(), "web link");
 
-    let mom = groups.iter().find(|g| g.address == "mom@family.test").unwrap();
+    let mom = groups
+        .iter()
+        .find(|g| g.address == "mom@family.test")
+        .unwrap();
     assert_eq!(mom.protected, Some(Hold::Correspondent));
 
     // Terminate ShopMart and The Daily Brief
@@ -94,7 +118,15 @@ fn scan_terminate_and_undo_on_a_real_server() {
         .cloned()
         .collect();
     let expected = chosen.iter().map(|g| g.targets.len()).sum::<usize>();
-    let out = terminate(&mut store, &folders, &chosen, &journal, false, &mut |_, _| {}).unwrap();
+    let out = terminate(
+        &mut store,
+        &folders,
+        &chosen,
+        &journal,
+        false,
+        &mut |_, _| {},
+    )
+    .unwrap();
     assert_eq!(out.messages, expected);
 
     let after = store.scan(&folders.inbox, 0, &mut |_, _| {}).unwrap();
@@ -103,7 +135,13 @@ fn scan_terminate_and_undo_on_a_real_server() {
     assert_eq!(trash.len(), expected);
     // Everything protected is still in the inbox
     let left: HashSet<&str> = after.iter().map(|m| m.subject.as_str()).collect();
-    for kept in ["Starred deal", "Flash sale today", "Your tax-free weekend receipt", "No id here", "Issue 0"] {
+    for kept in [
+        "Starred deal",
+        "Flash sale today",
+        "Your tax-free weekend receipt",
+        "No id here",
+        "Issue 0",
+    ] {
         assert!(left.contains(kept), "{kept} should have been kept");
     }
 
@@ -111,8 +149,16 @@ fn scan_terminate_and_undo_on_a_real_server() {
     let back = undo(&mut store, &journal, &out.batch).unwrap();
     assert_eq!(back.restored, expected);
     assert_eq!(back.missing, 0);
-    assert_eq!(store.scan(&folders.inbox, 0, &mut |_, _| {}).unwrap().len(), 65);
-    assert!(store.scan(&folders.trash, 0, &mut |_, _| {}).unwrap().is_empty());
+    assert_eq!(
+        store.scan(&folders.inbox, 0, &mut |_, _| {}).unwrap().len(),
+        65
+    );
+    assert!(
+        store
+            .scan(&folders.trash, 0, &mut |_, _| {})
+            .unwrap()
+            .is_empty()
+    );
 
     store.logout();
     let _ = std::fs::remove_dir_all(&dir);

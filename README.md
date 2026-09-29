@@ -18,6 +18,8 @@
 
 > *"I'll be back... for your spam"*
 
+> **Status:** the app is being rebuilt in Rust in [`app/`](app/). Milestone 1 (the Kill List: scan, group by sender, move to Trash, undo) works there now; try `cd app && cargo run --release -- --demo`. The TypeScript code in `src/` is the original prototype and will be retired once the Rust app covers it. The website lives in [`website/`](website/) and runs at [killall.email](https://killall.email).
+
 **Inbox Termination System** - An AI-powered email management tool with a retro 80s terminal aesthetic inspired by the Terminator. Uses Claude AI to intelligently categorize, organize, and clean up your inbox.
 
 ## Features

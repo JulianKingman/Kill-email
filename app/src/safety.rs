@@ -50,8 +50,16 @@ impl SafetyRules {
     pub fn new(safety: &Safety, correspondents: HashSet<String>, now: DateTime<Utc>) -> Self {
         Self {
             correspondents,
-            trusted: safety.trusted.iter().map(|t| t.trim().to_lowercase()).collect(),
-            patterns: safety.review_patterns.iter().map(|p| p.to_lowercase()).collect(),
+            trusted: safety
+                .trusted
+                .iter()
+                .map(|t| t.trim().to_lowercase())
+                .collect(),
+            patterns: safety
+                .review_patterns
+                .iter()
+                .map(|p| p.to_lowercase())
+                .collect(),
             cutoff: now - Duration::days(i64::from(safety.recent_days)),
         }
     }
@@ -99,7 +107,10 @@ fn contains_word(text: &str, pattern: &str) -> bool {
     while let Some(pos) = text[start..].find(pattern) {
         let begin = start + pos;
         let end = begin + pattern.len();
-        let before_ok = text[..begin].chars().next_back().is_none_or(|c| !is_word(c));
+        let before_ok = text[..begin]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_word(c));
         let after_ok = text[end..].chars().next().is_none_or(|c| !is_word(c));
         if before_ok && after_ok {
             return true;
@@ -132,14 +143,24 @@ mod tests {
     }
 
     fn rules(trusted: &[&str]) -> SafetyRules {
-        let safety = Safety { trusted: trusted.iter().map(|s| s.to_string()).collect(), ..Safety::default() };
-        SafetyRules::new(&safety, HashSet::from(["mom@family.example".to_string()]), Utc::now())
+        let safety = Safety {
+            trusted: trusted.iter().map(|s| s.to_string()).collect(),
+            ..Safety::default()
+        };
+        SafetyRules::new(
+            &safety,
+            HashSet::from(["mom@family.example".to_string()]),
+            Utc::now(),
+        )
     }
 
     #[test]
     fn correspondents_and_trusted_domains_are_protected() {
         let r = rules(&["@work.example", "friend@pals.example"]);
-        assert_eq!(r.sender_hold("mom@family.example"), Some(Hold::Correspondent));
+        assert_eq!(
+            r.sender_hold("mom@family.example"),
+            Some(Hold::Correspondent)
+        );
         assert_eq!(r.sender_hold("boss@work.example"), Some(Hold::Trusted));
         assert_eq!(r.sender_hold("hr@eu.work.example"), Some(Hold::Trusted));
         assert_eq!(r.sender_hold("friend@pals.example"), Some(Hold::Trusted));

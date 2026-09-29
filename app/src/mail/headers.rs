@@ -50,7 +50,10 @@ pub fn parse_meta(uid: u32, raw_headers: &[u8], flags: Flags, size: u32) -> Mess
             .filter(|id| !id.is_empty()),
         from,
         from_name,
-        subject: msg.and_then(|m| m.subject()).unwrap_or("(no subject)").to_string(),
+        subject: msg
+            .and_then(|m| m.subject())
+            .unwrap_or("(no subject)")
+            .to_string(),
         date: msg
             .and_then(|m| m.date())
             .and_then(|d| DateTime::<Utc>::from_timestamp(d.to_timestamp(), 0)),
@@ -92,7 +95,10 @@ pub fn parse_unsubscribe(list_unsubscribe: Option<&str>, post: Option<&str>) -> 
     // One-click needs an https URI to POST to (RFC 8058 section 3.1)
     out.one_click = out.https.is_some()
         && post
-            .map(|p| p.replace(' ', "").eq_ignore_ascii_case("List-Unsubscribe=One-Click"))
+            .map(|p| {
+                p.replace(' ', "")
+                    .eq_ignore_ascii_case("List-Unsubscribe=One-Click")
+            })
             .unwrap_or(false);
     out
 }
@@ -123,7 +129,11 @@ List-Unsubscribe: <mailto:unsub@shopmart.example?subject=stop>, <https://shopmar
 List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
 
     fn flags() -> Flags {
-        Flags { seen: true, flagged: false, answered: false }
+        Flags {
+            seen: true,
+            flagged: false,
+            answered: false,
+        }
     }
 
     #[test]
@@ -137,7 +147,10 @@ List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
         assert!(meta.date.is_some());
         assert!(meta.bulk);
         assert!(meta.unsubscribe.one_click);
-        assert_eq!(meta.unsubscribe.https.as_deref(), Some("https://shopmart.example/u/1"));
+        assert_eq!(
+            meta.unsubscribe.https.as_deref(),
+            Some("https://shopmart.example/u/1")
+        );
         assert_eq!(meta.unsubscribe.label(), "1-click");
     }
 
@@ -151,7 +164,10 @@ List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
 
     #[test]
     fn one_click_needs_https() {
-        let u = parse_unsubscribe(Some("<mailto:x@y.example>"), Some("List-Unsubscribe=One-Click"));
+        let u = parse_unsubscribe(
+            Some("<mailto:x@y.example>"),
+            Some("List-Unsubscribe=One-Click"),
+        );
         assert!(!u.one_click);
         assert_eq!(u.label(), "mailto");
         let u = parse_unsubscribe(Some("<http://insecure.example/u>"), None);
@@ -160,7 +176,8 @@ List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
 
     #[test]
     fn collects_recipients() {
-        let raw = b"To: Mom <MOM@family.example>, dad@family.example\r\nCc: friend@pals.example\r\n\r\n";
+        let raw =
+            b"To: Mom <MOM@family.example>, dad@family.example\r\nCc: friend@pals.example\r\n\r\n";
         let mut set = HashSet::new();
         parse_recipients(raw, &mut set);
         assert!(set.contains("mom@family.example"));

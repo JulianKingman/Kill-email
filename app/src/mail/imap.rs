@@ -4,8 +4,8 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result, anyhow, bail};
 use imap::types::Flag;
-use imap_proto::NameAttribute;
 use imap::{ClientBuilder, ConnectionMode, TlsKind};
+use imap_proto::NameAttribute;
 
 use super::headers::{Flags, parse_message_id, parse_meta, parse_recipients};
 use super::{Folders, MailStore, MessageMeta, SCAN_HEADERS, uid_set};
@@ -38,7 +38,12 @@ impl ImapStore {
         let caps = session.capabilities()?;
         let can_move = caps.has_str("MOVE");
         let has_uidplus = caps.has_str("UIDPLUS");
-        Ok(Self { session, account: account.clone(), can_move, has_uidplus })
+        Ok(Self {
+            session,
+            account: account.clone(),
+            can_move,
+            has_uidplus,
+        })
     }
 
     pub fn logout(mut self) {
@@ -66,7 +71,9 @@ impl MailStore for ImapStore {
         for name in names.iter() {
             for attr in name.attributes() {
                 match attr {
-                    NameAttribute::Trash if trash.is_none() => trash = Some(name.name().to_string()),
+                    NameAttribute::Trash if trash.is_none() => {
+                        trash = Some(name.name().to_string())
+                    }
                     NameAttribute::Sent if sent.is_none() => sent = Some(name.name().to_string()),
                     _ => {}
                 }
@@ -76,7 +83,11 @@ impl MailStore for ImapStore {
             "could not find your Trash folder. Set `trash = \"...\"` under [account] in the settings",
         )?;
         let sent = self.account.sent.clone().or(sent);
-        Ok(Folders { inbox: self.account.inbox.clone(), trash, sent })
+        Ok(Folders {
+            inbox: self.account.inbox.clone(),
+            trash,
+            sent,
+        })
     }
 
     fn scan(
@@ -144,7 +155,9 @@ impl MailStore for ImapStore {
                 self.session.uid_store(&set, "+FLAGS.SILENT (\\Deleted)")?;
                 self.session.uid_expunge(&set)?;
             } else {
-                bail!("this server supports neither MOVE nor UIDPLUS, so messages can't be moved safely");
+                bail!(
+                    "this server supports neither MOVE nor UIDPLUS, so messages can't be moved safely"
+                );
             }
         }
         Ok(())
@@ -166,9 +179,10 @@ impl MailStore for ImapStore {
         if candidates.is_empty() {
             return Ok(None);
         }
-        let fetches = self
-            .session
-            .uid_fetch(uid_set(&candidates), "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")?;
+        let fetches = self.session.uid_fetch(
+            uid_set(&candidates),
+            "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])",
+        )?;
         let exact = fetches
             .iter()
             .filter(|f| {

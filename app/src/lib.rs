@@ -6,3 +6,4 @@ pub mod mail;
 pub mod ops;
 pub mod safety;
 pub mod senders;
+pub mod tui;

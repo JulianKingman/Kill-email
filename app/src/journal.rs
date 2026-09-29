@@ -59,7 +59,12 @@ impl Journal {
             .create(true)
             .append(true)
             .open(&self.path)
-            .with_context(|| format!("could not write the undo journal at {}", self.path.display()))?;
+            .with_context(|| {
+                format!(
+                    "could not write the undo journal at {}",
+                    self.path.display()
+                )
+            })?;
         let mut buf = String::new();
         for r in records {
             buf.push_str(&serde_json::to_string(r)?);

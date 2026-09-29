@@ -54,7 +54,11 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
     let mut groups: HashMap<&str, SenderGroup> = HashMap::new();
 
     for m in messages {
-        let key = if m.from.is_empty() { "(unknown sender)" } else { m.from.as_str() };
+        let key = if m.from.is_empty() {
+            "(unknown sender)"
+        } else {
+            m.from.as_str()
+        };
         let g = groups.entry(key).or_insert_with(|| SenderGroup {
             address: key.to_string(),
             name: None,
@@ -99,7 +103,11 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
     }
 
     let mut out: Vec<SenderGroup> = groups.into_values().collect();
-    out.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.address.cmp(&b.address)));
+    out.sort_by(|a, b| {
+        b.total
+            .cmp(&a.total)
+            .then_with(|| a.address.cmp(&b.address))
+    });
     out
 }
 
@@ -131,7 +139,9 @@ impl SortBy {
         match self {
             SortBy::Volume => groups.sort_by(|a, b| b.total.cmp(&a.total)),
             SortBy::LeastRead => groups.sort_by(|a, b| {
-                a.read_pct().cmp(&b.read_pct()).then_with(|| b.total.cmp(&a.total))
+                a.read_pct()
+                    .cmp(&b.read_pct())
+                    .then_with(|| b.total.cmp(&a.total))
             }),
             SortBy::Oldest => groups.sort_by(|a, b| a.newest.cmp(&b.newest)),
         }
@@ -158,13 +168,19 @@ mod tests {
         assert_eq!(groups[0].total, 214);
         assert_eq!(groups[0].unsubscribe.label(), "1-click");
 
-        let mom = groups.iter().find(|g| g.address == "mom@family.example").unwrap();
+        let mom = groups
+            .iter()
+            .find(|g| g.address == "mom@family.example")
+            .unwrap();
         assert_eq!(mom.protected, Some(Hold::Correspondent));
         assert!(mom.targets.is_empty());
 
-        let shop = groups.iter().find(|g| g.address == "deals@shopmart.example").unwrap();
+        let shop = groups
+            .iter()
+            .find(|g| g.address == "deals@shopmart.example")
+            .unwrap();
         assert_eq!(shop.held.get(&Hold::Flagged), Some(&1));
-        assert!(shop.held.get(&Hold::Recent).is_some());
+        assert!(shop.held.contains_key(&Hold::Recent));
         assert_eq!(shop.targets.len() + shop.held_total(), shop.total);
         // Nothing protected ever lands in the target list
         let target_uids: HashSet<u32> = shop.targets.iter().map(|t| t.uid).collect();

@@ -66,7 +66,12 @@ pub fn terminate(
         }
     }
 
-    Ok(Terminated { batch, messages: total, senders: groups.len(), dry_run })
+    Ok(Terminated {
+        batch,
+        messages: total,
+        senders: groups.len(),
+        dry_run,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +93,10 @@ pub fn undo(store: &mut dyn MailStore, journal: &Journal, batch: &str) -> Result
     let mut missing = 0;
     for m in &moved {
         match store.find_by_message_id(&m.to, &m.message_id)? {
-            Some(uid) => by_route.entry((m.to.clone(), m.from.clone())).or_default().push(uid),
+            Some(uid) => by_route
+                .entry((m.to.clone(), m.from.clone()))
+                .or_default()
+                .push(uid),
             None => missing += 1,
         }
     }
@@ -100,8 +108,15 @@ pub fn undo(store: &mut dyn MailStore, journal: &Journal, batch: &str) -> Result
         store.move_messages(&trash, &uids, &back_to)?;
         restored += uids.len();
     }
-    journal.append(&[Record::Undone { batch: batch.to_string(), at: Utc::now() }])?;
-    Ok(Restored { batch: batch.to_string(), restored, missing })
+    journal.append(&[Record::Undone {
+        batch: batch.to_string(),
+        at: Utc::now(),
+    }])?;
+    Ok(Restored {
+        batch: batch.to_string(),
+        restored,
+        missing,
+    })
 }
 
 #[cfg(test)]
@@ -128,8 +143,10 @@ mod tests {
     fn terminate_then_undo_round_trips() {
         let (mut store, folders, groups, journal, _dir) = setup();
         let inbox_before = store.count("INBOX");
-        let shop: Vec<SenderGroup> =
-            groups.into_iter().filter(|g| g.address == "deals@shopmart.example").collect();
+        let shop: Vec<SenderGroup> = groups
+            .into_iter()
+            .filter(|g| g.address == "deals@shopmart.example")
+            .collect();
         let targets = shop[0].targets.len();
         assert!(targets > 0);
 
@@ -155,7 +172,15 @@ mod tests {
     fn dry_run_moves_nothing() {
         let (mut store, folders, groups, journal, _dir) = setup();
         let before = store.count("INBOX");
-        let out = terminate(&mut store, &folders, &groups[..1], &journal, true, &mut |_, _| {}).unwrap();
+        let out = terminate(
+            &mut store,
+            &folders,
+            &groups[..1],
+            &journal,
+            true,
+            &mut |_, _| {},
+        )
+        .unwrap();
         assert!(out.dry_run);
         assert_eq!(store.count("INBOX"), before);
         assert!(journal.batches().unwrap().is_empty());
@@ -164,8 +189,10 @@ mod tests {
     #[test]
     fn protected_senders_are_refused() {
         let (mut store, folders, groups, journal, _dir) = setup();
-        let mom: Vec<SenderGroup> =
-            groups.into_iter().filter(|g| g.address == "mom@family.example").collect();
+        let mom: Vec<SenderGroup> = groups
+            .into_iter()
+            .filter(|g| g.address == "mom@family.example")
+            .collect();
         assert!(terminate(&mut store, &folders, &mom, &journal, false, &mut |_, _| {}).is_err());
     }
 
@@ -173,7 +200,15 @@ mod tests {
     fn emptied_trash_is_reported_not_fatal() {
         let (mut store, folders, groups, journal, _dir) = setup();
         let first: Vec<SenderGroup> = groups.into_iter().take(1).collect();
-        let out = terminate(&mut store, &folders, &first, &journal, false, &mut |_, _| {}).unwrap();
+        let out = terminate(
+            &mut store,
+            &folders,
+            &first,
+            &journal,
+            false,
+            &mut |_, _| {},
+        )
+        .unwrap();
         store.folders.get_mut("Trash").unwrap().clear();
         let back = undo(&mut store, &journal, &out.batch).unwrap();
         assert_eq!(back.restored, 0);

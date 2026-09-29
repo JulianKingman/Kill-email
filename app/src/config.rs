@@ -115,9 +115,14 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        let local = matches!(self.account.host.as_str(), "localhost" | "127.0.0.1" | "::1");
+        let local = matches!(
+            self.account.host.as_str(),
+            "localhost" | "127.0.0.1" | "::1"
+        );
         if self.account.security == Security::None && !local {
-            bail!("security = \"none\" sends your password unencrypted; it is only allowed for localhost");
+            bail!(
+                "security = \"none\" sends your password unencrypted; it is only allowed for localhost"
+            );
         }
         Ok(())
     }

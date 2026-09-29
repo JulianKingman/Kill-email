@@ -1,0 +1,34 @@
+name: app
+
+on:
+  push:
+    paths: ["app/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["app/**", ".github/workflows/app.yml"]
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: Start a throwaway Dovecot for the IMAP integration test
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q dovecot-imapd
+          sudo useradd -r -M -s /usr/sbin/nologin kmail || true
+          sudo mkdir -p /var/tmp/kedc-mail /run/kedc && sudo chown kmail:kmail /var/tmp/kedc-mail
+          sudo dovecot -c tests/fixtures/dovecot-test.conf
+      - run: cargo test
+        env:
+          KILL_EMAIL_TEST_IMAP: 127.0.0.1:1143:tester:testpass
