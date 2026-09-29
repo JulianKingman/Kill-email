@@ -48,6 +48,8 @@ pub const SAMPLES: usize = 8;
 pub struct Target {
     pub uid: u32,
     pub message_id: String,
+    pub seen: bool,
+    pub size: u32,
 }
 
 impl SenderGroup {
@@ -128,6 +130,8 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
                 uid: m.uid,
                 // message_hold guarantees an ID for anything it lets through
                 message_id: m.message_id.clone().unwrap_or_default(),
+                seen: m.seen,
+                size: m.size,
             }),
         }
     }

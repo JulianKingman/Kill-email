@@ -358,9 +358,11 @@ impl App {
                 for (address, n) in &t.trashed {
                     if let Some(g) = self.groups.iter_mut().find(|g| &g.address == address) {
                         g.total -= n;
-                        g.unread = g.unread.min(g.total);
                         g.trashed += n;
-                        let gone: HashSet<u32> = g.targets.drain(..).map(|t| t.uid).collect();
+                        let gone = std::mem::take(&mut g.targets);
+                        g.unread -= gone.iter().filter(|t| !t.seen).count();
+                        g.bytes -= gone.iter().map(|t| u64::from(t.size)).sum::<u64>();
+                        let gone: HashSet<u32> = gone.iter().map(|t| t.uid).collect();
                         g.samples.retain(|s| !gone.contains(&s.uid));
                     }
                 }
@@ -784,6 +786,8 @@ mod tests {
         let g = &app.groups[0];
         assert_eq!(g.trashed, before.targets.len());
         assert_eq!(g.total, before.held_total());
+        let unread_kept = before.unread - before.targets.iter().filter(|t| !t.seen).count();
+        assert_eq!(g.unread, unread_kept);
         assert!(g.unsubscribed.is_some());
         assert!(
             g.samples.len() <= g.total,
