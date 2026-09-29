@@ -136,7 +136,7 @@ impl App {
                     Tone::Good,
                 );
                 if !t.dry_run {
-                    let chosen: HashSet<String> = self.marked.drain().collect();
+                    let chosen: HashSet<String> = std::mem::take(&mut self.marked);
                     let current = self.selected().map(|g| g.address.clone());
                     for g in &mut self.groups {
                         if chosen.contains(&g.address)

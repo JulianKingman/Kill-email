@@ -137,13 +137,13 @@ impl SortBy {
 
     pub fn apply(self, groups: &mut [SenderGroup]) {
         match self {
-            SortBy::Volume => groups.sort_by(|a, b| b.total.cmp(&a.total)),
+            SortBy::Volume => groups.sort_by_key(|g| std::cmp::Reverse(g.total)),
             SortBy::LeastRead => groups.sort_by(|a, b| {
                 a.read_pct()
                     .cmp(&b.read_pct())
                     .then_with(|| b.total.cmp(&a.total))
             }),
-            SortBy::Oldest => groups.sort_by(|a, b| a.newest.cmp(&b.newest)),
+            SortBy::Oldest => groups.sort_by_key(|a| a.newest),
         }
     }
 }

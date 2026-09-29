@@ -120,7 +120,7 @@ impl MailStore for ImapStore {
             }
             progress(out.len(), total);
         }
-        out.sort_by(|a, b| b.uid.cmp(&a.uid));
+        out.sort_by_key(|m| std::cmp::Reverse(m.uid));
         Ok(out)
     }
 

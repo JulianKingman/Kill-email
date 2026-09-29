@@ -123,7 +123,7 @@ impl MailStore for FakeStore {
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Vec<MessageMeta>> {
         let mut out = self.folders.get(folder).cloned().unwrap_or_default();
-        out.sort_by(|a, b| b.uid.cmp(&a.uid));
+        out.sort_by_key(|m| std::cmp::Reverse(m.uid));
         if limit > 0 {
             out.truncate(limit);
         }
