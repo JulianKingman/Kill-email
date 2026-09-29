@@ -1,11 +1,12 @@
 //! The terminal interface.
 
 pub mod app;
+pub mod march;
 pub mod theme;
 pub mod ui;
 pub mod worker;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -26,7 +27,10 @@ fn event_loop(
     app: &mut App,
     worker: &Worker,
 ) -> Result<()> {
+    let started = Instant::now();
     while !app.quit {
+        // One column every 110 ms: a brisk march, not a blur
+        app.tick = (started.elapsed().as_millis() / 110) as u64;
         terminal.draw(|f| ui::draw(f, app))?;
 
         while let Ok(update) = worker.updates.try_recv() {

@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Cell, Clear, Gauge, Paragraph, Row, Table, Wrap};
 
 use super::app::{App, Mode, Tone};
+use super::march::{self, March};
 use super::theme::{self, ALIVE, AMBER, ASH, BONE, EMBER, LOGO, MARK, PHOSPHOR, VOID};
 use crate::senders::SenderGroup;
 
@@ -85,9 +86,10 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 fn draw_scanning(f: &mut Frame, area: Rect, app: &App) {
     let logo_fits = area.width as usize >= LOGO[0].chars().count() + 4 && area.height >= 14;
     let logo_height = if logo_fits { LOGO.len() as u16 + 2 } else { 2 };
-    let [_, logo_area, gauge_area, note_area, _] = Layout::vertical([
+    let [_, logo_area, march_area, gauge_area, note_area, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(logo_height),
+        Constraint::Length(march::HEIGHT + 1),
         Constraint::Length(3),
         Constraint::Length(2),
         Constraint::Fill(1),
@@ -102,6 +104,11 @@ fn draw_scanning(f: &mut Frame, area: Rect, app: &App) {
         vec![Line::from(format!("{MARK} KILL ALL EMAIL")).style(theme::title())]
     };
     f.render_widget(Paragraph::new(logo).alignment(Alignment::Center), logo_area);
+
+    let [march_area] = Layout::horizontal([Constraint::Max(70)])
+        .flex(Flex::Center)
+        .areas(march_area);
+    f.render_widget(March { tick: app.tick }, march_area);
 
     let p = &app.progress;
     let [gauge_area] = Layout::horizontal([Constraint::Max(70)])
@@ -419,15 +426,25 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_working(f: &mut Frame, area: Rect, app: &App) {
     let p = &app.progress;
-    let text = vec![
+    let mut text = vec![
         Line::from(if p.total > 0 {
             format!("{} {} / {}", p.stage, thousands(p.done), thousands(p.total))
         } else {
             format!("{}...", p.stage)
         })
         .style(Style::new().fg(BONE).bold()),
+        Line::from(""),
     ];
-    modal(f, area, " WORKING ", text, "");
+    // Room for the squad below the status line
+    text.extend((0..march::HEIGHT).map(|_| Line::from("")));
+    let rect = modal(f, area, " WORKING ", text, "");
+    let inner = Rect {
+        x: rect.x + 1,
+        y: rect.y + 3,
+        width: rect.width.saturating_sub(2),
+        height: march::HEIGHT.min(rect.height.saturating_sub(4)),
+    };
+    f.render_widget(March { tick: app.tick }, inner);
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
@@ -460,7 +477,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
     modal(f, area, " HELP ", text, "any key to close");
 }
 
-fn modal(f: &mut Frame, area: Rect, title: &str, mut text: Vec<Line>, keys: &str) {
+fn modal(f: &mut Frame, area: Rect, title: &str, mut text: Vec<Line>, keys: &str) -> Rect {
     if !keys.is_empty() {
         text.push(Line::from(""));
         text.push(Line::from(Span::styled(keys.to_string(), theme::key())));
@@ -482,6 +499,7 @@ fn modal(f: &mut Frame, area: Rect, title: &str, mut text: Vec<Line>, keys: &str
         Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
         rect,
     );
+    rect
 }
 
 pub fn thousands(n: usize) -> String {

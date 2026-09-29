@@ -1,5 +1,5 @@
 //! Render the demo board to HTML for screenshots: `cargo run --example snapshot -- 120 36 board > out.html`
-//! Screens: board, confirm, scanning, help.
+//! Screens: board, confirm, scanning, working, help. Optional 4th argument: animation tick.
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -19,6 +19,7 @@ fn main() {
     let width: u16 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(120);
     let height: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(36);
     let screen = args.get(3).map(String::as_str).unwrap_or("board");
+    let tick: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let mut app = App::new("you@example.com".into(), false, true, None);
     if screen == "scanning" {
@@ -51,6 +52,16 @@ fn main() {
         }
     }
 
+    app.tick = tick;
+    if screen == "working" {
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        app.on_key(KeyEvent::from(KeyCode::Char('y')));
+        app.progress = Progress {
+            stage: "Terminating",
+            done: 120,
+            total: 378,
+        };
+    }
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let buf = terminal.backend().buffer();

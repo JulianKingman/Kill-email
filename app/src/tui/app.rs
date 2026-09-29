@@ -41,6 +41,8 @@ pub struct App {
     /// Newest batch that can still be undone
     pub last_batch: Option<Batch>,
     pub quit: bool,
+    /// Animation clock for the marching robots
+    pub tick: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +74,7 @@ impl App {
             status: None,
             last_batch,
             quit: false,
+            tick: 0,
         }
     }
 
