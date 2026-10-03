@@ -6,13 +6,20 @@
   "bin": {
     "kill-email": "./dist/index.js"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist build-test",
-    "test": "tsc -p tsconfig.test.json && node --test \"build-test/test/*.test.js\""
+    "test": "tsc -p tsconfig.test.json && node --test \"build-test/test/*.test.js\"",
+    "web:dev": "concurrently \"npm run dev -w @kill-email/server\" \"npm run dev -w @kill-email/client\"",
+    "web:build": "npm run build -w @kill-email/shared && npm run build -w @kill-email/server && npm run build -w @kill-email/client",
+    "web:start": "npm run start -w @kill-email/server",
+    "web:clean": "rm -rf packages/*/dist packages/*/node_modules"
   },
   "keywords": [
     "email",
@@ -52,6 +59,7 @@
     "@types/inquirer": "^9.0.7",
     "@types/mailparser": "^3.4.4",
     "@types/node": "^20.11.0",
+    "concurrently": "^8.2.2",
     "typescript": "^5.3.3"
   },
   "engines": {
