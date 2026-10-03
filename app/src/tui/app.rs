@@ -1095,4 +1095,39 @@ mod tests {
         assert!(matches!(effects[0], Effect::SaveSettings(ref c) if c.safety.recent_days == 30));
         assert!(matches!(effects[1], Effect::Job(Job::Scan(ref s)) if s.recent_days == 30));
     }
+
+    fn screen(app: &mut App) -> String {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(150, 40)).unwrap();
+        term.draw(|f| crate::tui::ui::draw(f, app)).unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect()
+    }
+
+    #[test]
+    fn detail_pane_says_what_enter_will_do() {
+        let mut app = loaded();
+        let shown = screen(&mut app);
+        assert!(shown.contains("Nothing marked: enter acts on this one"));
+        assert!(shown.contains("Trash "));
+
+        // Unsubscribe only, then look back at it
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Up);
+        let shown = screen(&mut app);
+        assert!(!shown.contains("Nothing marked"));
+        assert!(shown.contains("Keep all"), "{shown}");
+        assert!(shown.contains("Unsubscribe (1-click)"), "{shown}");
+
+        // The next one down is marked for nothing
+        press(&mut app, KeyCode::Down);
+        let shown = screen(&mut app);
+        assert!(shown.contains("Stay subscribed") || shown.contains("No way to unsubscribe"));
+    }
 }

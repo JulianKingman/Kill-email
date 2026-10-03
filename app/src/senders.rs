@@ -90,6 +90,8 @@ impl SenderGroup {
 
 pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<SenderGroup> {
     let mut groups: HashMap<&str, SenderGroup> = HashMap::new();
+    // Every display name each address used, and how often
+    let mut names: HashMap<&str, HashMap<&str, usize>> = HashMap::new();
 
     for m in messages {
         let key = if m.from.is_empty() {
@@ -135,8 +137,8 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
         if m.seen {
             g.last_opened = g.last_opened.max(m.date);
         }
-        if g.name.is_none() {
-            g.name = m.from_name.clone();
+        if let Some(name) = &m.from_name {
+            *names.entry(key).or_default().entry(name).or_default() += 1;
         }
         if m.unsubscribe.rank() > g.unsubscribe.rank() {
             g.unsubscribe = m.unsubscribe.clone();
@@ -175,6 +177,7 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
     for g in &mut out {
         trim_samples(&mut g.samples);
         g.kind = dominant_kind(&g.kinds, g.total);
+        g.name = names.get(g.address.as_str()).and_then(steady_name);
     }
     out.sort_by(|a, b| {
         b.total
@@ -182,6 +185,17 @@ pub fn group_by_sender(messages: &[MessageMeta], rules: &SafetyRules) -> Vec<Sen
             .then_with(|| a.address.cmp(&b.address))
     });
     out
+}
+
+/// The name an address goes by, if it mostly uses one. Services like GitHub put
+/// whoever triggered each notification in the name, so no single one stands for
+/// the sender, and the address says more.
+fn steady_name(counts: &HashMap<&str, usize>) -> Option<String> {
+    let named: usize = counts.values().sum();
+    let (name, n) = counts
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
+    (n * 2 > named).then(|| name.to_string())
 }
 
 /// The kind most of a sender's mail is. A sender whose mail is even partly about
@@ -299,5 +313,24 @@ mod tests {
                 assert!(!target_uids.contains(&m.uid));
             }
         }
+    }
+
+    #[test]
+    fn name_is_the_one_an_address_mostly_uses() {
+        let counts = |pairs: &[(&'static str, usize)]| pairs.iter().copied().collect();
+        assert_eq!(
+            steady_name(&counts(&[("Shop Mart", 9), ("Shop Mart Deals", 2)])),
+            Some("Shop Mart".into())
+        );
+        // A different person on every GitHub notification: use the address
+        assert_eq!(
+            steady_name(&counts(&[
+                ("John Schank", 3),
+                ("Ada Li", 2),
+                ("Sam Roe", 2)
+            ])),
+            None
+        );
+        assert_eq!(steady_name(&counts(&[])), None);
     }
 }

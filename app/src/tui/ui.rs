@@ -215,6 +215,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
     .style(Style::new().fg(ASH).add_modifier(Modifier::BOLD))
     .bottom_margin(0);
 
+    let selected = app.table.selected();
     let rows: Vec<Row> = app
         .groups
         .iter()
@@ -223,13 +224,14 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
             let marked = app.marked.contains(&g.address);
             let leaving = app.leaving.contains(&g.address);
             let (verdict, color) = verdict(g);
+            // A real mark is a solid block of color so it can't pass for a suggestion.
             // A dim dot where a mark could go, a grey mark where one is suggested,
             // nothing where it can't go
             let dot = Style::new().fg(EMBER);
             let ghost = Style::new().fg(ASH);
             let advice = g.suggestion.as_ref().map(|s| s.advice);
             let kill = if marked {
-                Span::styled(icons.kill, Style::new().fg(PHOSPHOR).bold())
+                Span::styled(icons.kill, Style::new().fg(VOID).bg(PHOSPHOR).bold())
             } else if g.protected.is_none() && !g.targets.is_empty() {
                 if advice.is_some() {
                     Span::styled(icons.kill, ghost)
@@ -240,7 +242,7 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                 Span::raw(" ")
             };
             let leave = if leaving {
-                Span::styled(icons.leave, Style::new().fg(AMBER).bold())
+                Span::styled(icons.leave, Style::new().fg(VOID).bg(AMBER).bold())
             } else if can_leave(g) {
                 if advice == Some(Advice::Unsubscribe) {
                     Span::styled(icons.leave, ghost)
@@ -272,7 +274,13 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
                     Style::new().fg(if marked { AMBER } else { color }),
                 )),
             ])
-            .style(Style::new().fg(fg).bg(theme::row_bg(i)))
+            .style(if selected == Some(i) {
+                // Painted here rather than as the table's highlight, which would
+                // cover the marks' own colors
+                Style::new().fg(fg).bg(EMBER).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(fg).bg(theme::row_bg(i))
+            })
         })
         .collect();
 
@@ -293,7 +301,6 @@ fn draw_table(f: &mut Frame, area: Rect, app: &mut App) {
         .header(header)
         .column_spacing(1)
         .block(Block::bordered().border_style(theme::border()).title(title))
-        .row_highlight_style(Style::new().bg(EMBER).fg(BONE).add_modifier(Modifier::BOLD))
         .highlight_symbol("▶");
     f.render_stateful_widget(table, area, &mut app.table);
 }
@@ -345,6 +352,10 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
         )),
         Line::from(Span::styled(g.address.clone(), theme::muted())),
         Line::from(""),
+    ];
+    on_enter(&mut lines, app, g);
+    lines.extend([
+        Line::from(""),
         Line::from(vec![
             label("Emails"),
             Span::raw(format!(
@@ -378,7 +389,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             }),
         ]),
         Line::from(""),
-    ];
+    ]);
     if let Some(s) = &g.suggestion {
         lines.push(Line::from(Span::styled(
             format!("SUGGESTED: {}", s.advice.label().to_uppercase()),
@@ -411,27 +422,6 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                 Style::new().fg(ASH).bold(),
             )));
         }
-        if !g.targets.is_empty() || g.trashed == 0 {
-            lines.push(Line::from(Span::styled(
-                format!("{} would go to Trash", thousands(g.targets.len())),
-                Style::new().fg(PHOSPHOR).bold(),
-            )));
-        }
-        for (hold, n) in &g.held {
-            lines.push(Line::from(Span::styled(
-                format!("  kept {n}: {}", hold.label()),
-                Style::new().fg(ALIVE),
-            )));
-        }
-    }
-    if let Some(at) = g.unsubscribed {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Unsubscribed {}",
-                at.with_timezone(&chrono::Local).format("%b %-d")
-            ),
-            Style::new().fg(ALIVE),
-        )));
     }
 
     // What they actually send, newest first
@@ -462,6 +452,90 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
         }
     }
     f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// What enter will do to this sender: its mail, then its subscription
+fn on_enter(lines: &mut Vec<Line<'static>>, app: &App, g: &SenderGroup) {
+    let icons = theme::icons(app.config.prefs.icons);
+    let kills = app.chosen().iter().any(|c| c.address == g.address);
+    let leaves = app.leavers().iter().any(|c| c.address == g.address);
+    let hint = |key: &'static str, what: String| {
+        [
+            Span::styled(format!("   {key}"), theme::key()),
+            Span::styled(format!(" {what}"), theme::muted()),
+        ]
+    };
+
+    lines.push(Line::from(Span::styled("ON ENTER", theme::title())));
+    if app.marked.is_empty() && app.leaving.is_empty() && (kills || leaves) {
+        lines.push(Line::from(Span::styled(
+            "Nothing marked: enter acts on this one",
+            theme::muted(),
+        )));
+    }
+
+    let mut mail = vec![Span::raw(format!("{} ", icons.kill))];
+    if kills {
+        mail[0].style = Style::new().fg(PHOSPHOR).bold();
+        mail.push(Span::styled(
+            format!("Trash {} messages", thousands(g.targets.len())),
+            Style::new().fg(PHOSPHOR).bold(),
+        ));
+        if g.held_total() > 0 {
+            mail.push(Span::styled(
+                format!(", keep {}", thousands(g.held_total())),
+                Style::new().fg(ALIVE),
+            ));
+        }
+    } else {
+        mail[0].style = theme::muted();
+        if g.protected.is_some() {
+            mail.push(Span::styled("Keep all: protected", Style::new().fg(ALIVE)));
+        } else if g.targets.is_empty() {
+            mail.push(Span::styled("Nothing left to delete", theme::muted()));
+        } else {
+            mail.push(Span::styled("Keep all", Style::new().fg(BONE)));
+            mail.extend(hint(
+                "space",
+                format!("to trash {}", thousands(g.targets.len())),
+            ));
+        }
+    }
+    lines.push(Line::from(mail));
+    if kills {
+        for (hold, n) in &g.held {
+            lines.push(Line::from(Span::styled(
+                format!("    always kept {n}: {}", hold.label()),
+                Style::new().fg(ALIVE),
+            )));
+        }
+    }
+
+    let mut sub = vec![Span::raw(format!("{} ", icons.leave))];
+    if leaves {
+        sub[0].style = Style::new().fg(AMBER).bold();
+        sub.push(Span::styled(
+            format!("Unsubscribe ({})", g.unsubscribe.label()),
+            Style::new().fg(AMBER).bold(),
+        ));
+    } else {
+        sub[0].style = theme::muted();
+        if let Some(at) = g.unsubscribed {
+            sub.push(Span::styled(
+                format!(
+                    "Unsubscribed {}",
+                    at.with_timezone(&chrono::Local).format("%b %-d")
+                ),
+                Style::new().fg(ALIVE),
+            ));
+        } else if can_leave(g) {
+            sub.push(Span::styled("Stay subscribed", Style::new().fg(BONE)));
+            sub.extend(hint("n", "to unsubscribe".into()));
+        } else {
+            sub.push(Span::styled("No way to unsubscribe", theme::muted()));
+        }
+    }
+    lines.push(Line::from(sub));
 }
 
 /// Cut to `width` columns with an ellipsis
