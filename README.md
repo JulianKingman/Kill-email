@@ -220,6 +220,16 @@ npm run build   # compile to dist/
 npm test        # compile and run the unit tests (node:test)
 ```
 
+The web app lives in `packages/` (client, server, shared):
+
+```bash
+npm run web:dev        # server and client together
+npm run web:test       # server tests
+npm run web:test:imap  # real IMAP tests against a local GreenMail container (requires Docker)
+```
+
+The IMAP tests seed mail over SMTP before checking it. Detailed plan: [`docs/TESTING_PLAN.md`](docs/TESTING_PLAN.md).
+
 ## License
 
 MIT
